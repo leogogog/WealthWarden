@@ -647,8 +647,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 
                 asset = db.query(Asset).filter(Asset.name.ilike(f"%{asset_name}%")).first()
                 if not asset:
-                    await update.message.reply_text(f"Asset '{asset_name}' not found. Please set it up first.")
-                    return
+                    # Auto-create for Quick Log too
+                    name_lower = asset_name.lower()
+                    asset_type = "LIQUID"
+                    if any(x in name_lower for x in ['credit', 'card', 'visa', 'master', 'loan', 'debt', 'huabei', 'baitiao']):
+                        asset_type = "CREDIT"
+                        
+                    asset = Asset(name=asset_name, balance=0.0, category="General", type=asset_type)
+                    db.add(asset)
+                    db.commit()
+                    db.refresh(asset)
+                    # Don't return, proceed to log
                 
                 new_tx = Transaction(
                     amount=abs(amount),
@@ -660,8 +669,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     raw_text=f"[QuickLog] {text}"
                 )
                 
-                if amount > 0: asset.balance -= abs(amount)
-                else: asset.balance += abs(amount)
+                # Logic update for Liability/Credit
+                if asset.type == 'CREDIT':
+                    if amount > 0: asset.balance += abs(amount) # Expense increases debt
+                    else: asset.balance -= abs(amount) # Income payment reduces debt
+                else:
+                    if amount > 0: asset.balance -= abs(amount)
+                    else: asset.balance += abs(amount)
                 
                 db.add(new_tx)
                 db.commit()
@@ -1091,7 +1105,38 @@ async def handle_dual_intent(update, context, result):
                     
                     response_parts.append(f"Asset {asset.name} balance updated: {asset.balance:.2f} {asset.currency}")
                 else:
-                    response_parts.append(f"Asset '{asset_name}' not found. Balance not updated.")
+                    # Auto-create the asset
+                    # Infer type
+                    name_lower = asset_name.lower()
+                    asset_type = "LIQUID"
+                    if any(x in name_lower for x in ['credit', 'card', 'visa', 'master', 'loan', 'debt', 'huabei', 'baitiao']):
+                        asset_type = "CREDIT"
+                    
+                    asset = Asset(
+                        name=asset_name,
+                        balance=0.0,
+                        category="General",
+                        type=asset_type
+                    )
+                    db.add(asset)
+                    db.commit() # Commit to get ID
+                    db.refresh(asset)
+                    
+                    new_tx.asset_id = asset.id
+                    
+                    # Update balance (freshly created 0.0)
+                    if tx_data.get('type') == 'EXPENSE':
+                        if asset_type == 'CREDIT':
+                            asset.balance += tx_data.get('amount') # Debt increases
+                        else:
+                            asset.balance -= tx_data.get('amount')
+                    elif tx_data.get('type') == 'INCOME':
+                        if asset_type == 'CREDIT':
+                            asset.balance -= tx_data.get('amount') # Debt decreases
+                        else:
+                            asset.balance += tx_data.get('amount')
+                    
+                    response_parts.append(f"Created new asset '{asset.name}' ({asset_type}).\nBalance updated: {asset.balance:.2f} {asset.currency}")
             else:
                 # AMBIGUITY: No asset name found
                 response_parts.append("Payment source not detected.")
