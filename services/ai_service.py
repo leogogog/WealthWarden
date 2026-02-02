@@ -45,7 +45,8 @@ class AIService:
         {{
             "intent": "MIXED",  // Use "MIXED" if both data types exist, otherwise "RECORD", "UPDATE_ASSET", etc.
             
-            // OPTIONAL: If an expense/income is found
+            // OPTIONAL: If an expense/income is found. 
+            // IMPORTANT: Leave "asset_name" null if the payment source is not explicitly clear.
             "transaction_data": {{
                 "amount": <float>,
                 "currency": "<string, default {self.currency}>",

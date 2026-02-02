@@ -53,13 +53,15 @@ class FinanceAnalyzer:
                 
         days_passed = now.day
         daily_avg = total_expense / days_passed if days_passed > 0 else 0
+        net_savings = total_income - total_expense
+        savings_rate = (net_savings / total_income * 100) if total_income > 0 else 0.0
         
         return {
             "period": f"{now.strftime('%B %Y')}",
             "total_income": total_income,
             "total_expense": total_expense,
-            "net_savings": total_income - total_expense,
-            "categories": by_category,
+            "net_savings": net_savings,
+            "savings_rate": savings_rate, 
             "categories": by_category,
             "daily_average": daily_avg
         }

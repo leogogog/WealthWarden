@@ -59,6 +59,7 @@ async def post_init(application: Application) -> None:
 def get_main_menu():
     """Returns a persistent reply keyboard."""
     keyboard = [
+        ["Log: Alipay", "Log: WeChat"],
         ["Wallet", "Log Transaction"],
         ["Budget", "Analytics"],
         ["History", "More"]
@@ -217,12 +218,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
              parse_mode='Markdown'
         )
 
-    elif data.startswith("sel_src_"):
-        # Source Selected for Log Flow
+    elif data.startswith("sel_src_") or data.startswith("ai_src_"):
+        # Source Selected for Log Flow (manual prompt or AI ambiguity)
+        is_ai = data.startswith("ai_src_")
         asset_id = int(data.split("_")[2])
-        tx_data = context.user_data.get('log_data')
+        db = next(get_db())
+        asset = db.get(Asset, asset_id)
         
-        if not tx_data:
+        if is_ai:
+            tx_id = context.user_data.pop('pending_ai_log', None)
+            if tx_id:
+                tx = db.get(Transaction, tx_id)
+                if tx and asset:
+                    tx.asset_id = asset.id
+                    if tx.type == 'EXPENSE': asset.balance -= tx.amount
+                    else: asset.balance += tx.amount
+                    db.commit()
+                    await query.message.edit_text(f"Transaction linked to {asset.name}. New balance: {asset.balance:.2f}")
+                else:
+                    await query.message.edit_text("Error: Transaction or Asset not found.")
+            else:
+                await query.message.edit_text("Error: No pending transaction found.")
+            return
+
+        # Original Manual sel_src_ logic
+        log_data = context.user_data.get('log_data')
+        
+        if not log_data:
             await query.message.edit_text("Transaction session expired. Please start over.")
             return
 
@@ -577,10 +599,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     text = update.message.text
     
-    # Check for ForceReply responses
-    if update.message.reply_to_message and update.message.reply_to_message.text:
-        reply_to_text = update.message.reply_to_message.text
+    # Check for ForceReply responses or States
+    if (update.message.reply_to_message and update.message.reply_to_message.text) or context.user_data:
+        reply_to_text = update.message.reply_to_message.text if update.message.reply_to_message else ""
         db = next(get_db())
+
+        # Case 0: Quick Log for specific Asset
+        if "expect_quick_log_for" in context.user_data:
+            asset_name = context.user_data.pop('expect_quick_log_for')
+            parts = text.split(maxsplit=1)
+            try:
+                amount = float(parts[0])
+                rest = parts[1] if len(parts) > 1 else "General"
+                
+                asset = db.query(Asset).filter(Asset.name.ilike(f"%{asset_name}%")).first()
+                if not asset:
+                    await update.message.reply_text(f"Asset '{asset_name}' not found. Please set it up first.")
+                    return
+                
+                new_tx = Transaction(
+                    amount=abs(amount),
+                    currency="CNY",
+                    category=rest.split()[0] if rest != "General" else "General",
+                    type="EXPENSE" if amount > 0 else "INCOME",
+                    description=rest,
+                    asset_id=asset.id,
+                    raw_text=f"[QuickLog] {text}"
+                )
+                
+                if amount > 0: asset.balance -= abs(amount)
+                else: asset.balance += abs(amount)
+                
+                db.add(new_tx)
+                db.commit()
+                await update.message.reply_text(f"Recorded {new_tx.amount} on {asset.name}.\nNew Balance: {asset.balance:.2f}")
+                return
+            except ValueError:
+                await update.message.reply_text("Invalid format. Send 'Amount [Category]'")
+                return
 
         # Case 1: Updating Balance
         if "expect_balance_for" in context.user_data:
@@ -683,6 +739,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == "Log Transaction":
         await update.message.reply_text("Enter amount and category (e.g., '50 Lunch'):")
         context.user_data['expect_log_details'] = True
+        return
+    elif text.startswith("Log: "):
+        asset_name = text.split(": ")[1]
+        context.user_data['expect_quick_log_for'] = asset_name
+        await update.message.reply_text(f"Logging for *{asset_name}*.\nEnter amount and category/remark (e.g. '50 Coffee'):", parse_mode='Markdown')
         return
     elif text == "Report":
         await handle_report(update, context)
@@ -944,7 +1005,21 @@ async def handle_dual_intent(update, context, result):
                     
                     response_parts.append(f"Asset {asset.name} balance updated: {asset.balance:.2f} {asset.currency}")
                 else:
-                    response_parts.append(f"Asset {asset_name} not found. Balance not updated.")
+                    response_parts.append(f"Asset '{asset_name}' not found. Balance not updated.")
+            else:
+                # AMBIGUITY: No asset name found
+                response_parts.append("Payment source not detected.")
+                context.user_data['pending_ai_log'] = new_tx.id
+                
+                assets = db.query(Asset).all()
+                keyboard = []
+                for a in assets:
+                    keyboard.append([InlineKeyboardButton(f"Paid via {a.name}", callback_data=f"ai_src_{a.id}")])
+                
+                await update.message.reply_text(
+                    "I noticed a transaction but I'm not sure which account was used.\nPlease select the source:",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
 
     # 2. Process Assets
     assets_data = result.get("assets")

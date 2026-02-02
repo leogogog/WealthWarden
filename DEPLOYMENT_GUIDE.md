@@ -57,6 +57,11 @@ Start the bot with Docker Compose:
 docker compose up -d --build
 ```
 
+```bash
+# Data Migration (First Time running v2)
+docker compose exec bot python fix_db_schema.py    # If you see "no column asset_id" errors
+```
+
 ## 4. How to Update Code
 In the future, when you make changes locally:
 1.  **Local**: `git push` your changes.
