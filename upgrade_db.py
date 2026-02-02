@@ -32,28 +32,36 @@ def upgrade_database():
     cursor = conn.cursor()
     
     try:
-        # 1. Check & Fix 'assets' table for 'category'
-        print("Checking 'assets' table...")
+        # 1. Check & Fix 'assets' table
+        print("Checking 'assets' table columns...")
         cursor.execute("PRAGMA table_info(assets)")
-        columns = [row[1] for row in cursor.fetchall()]
+        # row[1] is name, row[2] is type
+        existing_cols = {row[1]: row[2] for row in cursor.fetchall()}
         
-        if not columns:
+        if not existing_cols:
             print("⚠️ Table 'assets' not found or empty. Skipping.")
-        elif "category" in columns:
-            print("✅ 'category' column already exists.")
         else:
-            print("🛠 Adding missing 'category' column...")
-            cursor.execute("ALTER TABLE assets ADD COLUMN category TEXT DEFAULT 'OTHERS'")
-            conn.commit()
-            print("✅ Fixed: Added 'category' column.")
-
-        # 2. Check & Fix 'assets' table for 'currency' (just in case)
-        if columns and "currency" not in columns:
-            print("🛠 Adding missing 'currency' column...")
-            cursor.execute("ALTER TABLE assets ADD COLUMN currency TEXT DEFAULT 'CNY'")
-            conn.commit()
-            print("✅ Fixed: Added 'currency' column.")
+            # list of (col_name, col_type, default_val)
+            required_columns = [
+                ("category", "TEXT", "'OTHERS'"),
+                ("currency", "TEXT", "'CNY'"),
+                ("balance", "FLOAT", "0.0"),
+                ("updated_at", "DATETIME", "CURRENT_TIMESTAMP")
+            ]
             
+            for col_name, col_type, default_val in required_columns:
+                if col_name not in existing_cols:
+                    print(f"🛠 Adding missing '{col_name}' column...")
+                    # SQLite ADD COLUMN syntax
+                    if col_type == "DATETIME":
+                        cursor.execute(f"ALTER TABLE assets ADD COLUMN {col_name} {col_type}")
+                    else:
+                        cursor.execute(f"ALTER TABLE assets ADD COLUMN {col_name} {col_type} DEFAULT {default_val}")
+                    conn.commit()
+                    print(f"✅ Fixed: Added '{col_name}' column.")
+                else:
+                    print(f"✅ '{col_name}' column exists.")
+
         print("\n🎉 Database upgrade completed successfully!")
         
     except Exception as e:
