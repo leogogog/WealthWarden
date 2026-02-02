@@ -40,16 +40,19 @@ class FinanceAnalyzer:
     def _aggr_transactions(self, txs, now):
         total_income = 0.0
         total_expense = 0.0
-        by_category = {}
+        expense_by_category = {}
+        income_by_category = {}
         
         for tx in txs:
             amt = tx.amount
             if tx.type == 'INCOME':
                 total_income += amt
+                cat = tx.category or "Uncategorized"
+                income_by_category[cat] = income_by_category.get(cat, 0.0) + amt
             elif tx.type == 'EXPENSE':
                 total_expense += amt
                 cat = tx.category or "Uncategorized"
-                by_category[cat] = by_category.get(cat, 0.0) + amt
+                expense_by_category[cat] = expense_by_category.get(cat, 0.0) + amt
                 
         days_passed = now.day
         daily_avg = total_expense / days_passed if days_passed > 0 else 0
@@ -62,7 +65,8 @@ class FinanceAnalyzer:
             "total_expense": total_expense,
             "net_savings": net_savings,
             "savings_rate": savings_rate, 
-            "categories": by_category,
+            "expense_categories": expense_by_category,
+            "income_categories": income_by_category,
             "daily_average": daily_avg
         }
 
@@ -166,26 +170,35 @@ class FinanceAnalyzer:
             "asset_distribution": by_category,
             "asset_list": [{"name": a.name, "balance": a.balance, "category": a.category} for a in assets]
         }
-    
+
     def format_summary_text(self, data):
         """Convert stats to a readable string for the AI."""
         if isinstance(data, str): return data # Already text
         
-        cat_str = "\n".join([f"- {k}: {v:.2f}" for k, v in data.get('categories', {}).items()])
+        exp_cat_str = "\n".join([f"- {k}: {v:.2f}" for k, v in data.get('expense_categories', {}).items()])
+        inc_cat_str = "\n".join([f"- {k}: {v:.2f}" for k, v in data.get('income_categories', {}).items()])
         
         asset_summary = self.get_asset_summary()
         asset_dist_str = "\n".join([f"- {k}: {v:.2f}" for k, v in asset_summary['asset_distribution'].items()])
         
-        return (
+        msg = (
             f"--- Financial Summary ---\n"
             f"Period: {data['period']}\n"
             f"Total Income: {data['total_income']:.2f}\n"
             f"Total Expense: {data['total_expense']:.2f}\n"
             f"Net Savings: {data['net_savings']:.2f}\n"
             f"Savings Rate: {data.get('savings_rate', 0):.1f}%\n"
-            f"Daily Avg Expense: {data['daily_average']:.2f}\n"
-            f"Expense Breakdown:\n{cat_str}\n\n"
+            f"Daily Avg Expense: {data['daily_average']:.2f}\n\n"
+        )
+        
+        if inc_cat_str:
+            msg += f"Income Breakdown (Yields):\n{inc_cat_str}\n\n"
+            
+        msg += f"Expense Breakdown:\n{exp_cat_str}\n\n"
+        
+        msg += (
             f"--- Asset Distribution ---\n"
             f"Total Asset Balance: {asset_summary['total_asset_balance']:.2f}\n"
             f"Distribution:\n{asset_dist_str}"
         )
+        return msg
