@@ -16,7 +16,7 @@
 ## 🛠️ 快速开始
 
 ### 前置要求
-- Python 3.9+ 或 Docker
+- Python 3.11+ 或 Docker
 - [Telegram Bot Token](https://t.me/BotFather)
 - [Google Gemini API Key](https://aistudio.google.com/)
 

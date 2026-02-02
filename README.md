@@ -16,7 +16,7 @@ It tracks your expenses, income, and receipts, providing scientific financial an
 ## 🛠️ Quick Start
 
 ### Prerequisites
-- Python 3.9+ or Docker
+- Python 3.11+ or Docker
 - A [Telegram Bot Token](https://t.me/BotFather)
 - A [Google Gemini API Key](https://aistudio.google.com/)
 
