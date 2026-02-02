@@ -3,7 +3,7 @@ import os
 import asyncio
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from telegram import Update, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from db.database import init_db, get_db
 from db.models import Transaction, Asset
@@ -26,17 +26,31 @@ logger = logging.getLogger(__name__)
 ai_service = None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a welcome message when the command /start is issued."""
+    """Send a welcome message and show menu."""
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
-        logger.warning(f"Unauthorized access attempt from user_id: {user.id} (Expected: {ALLOWED_USER_ID})")
-        return # Silent ignore for unauthorized users
+        logger.warning(f"Unauthorized access from {user.id}")
+        return
         
     await update.message.reply_html(
         f"Hi {user.mention_html()}! I'm your Personal Finance Bot.\n"
         f"Send me any expense, income, or receipt photo, and I'll track it for you.",
         reply_markup=get_main_menu()
     )
+
+async def post_init(application: Application) -> None:
+    """Register bot commands with Telegram."""
+    commands = [
+        BotCommand("start", "Init bot and show menu"),
+        BotCommand("assets", "Show all asset balances"),
+        BotCommand("report", "Get monthly report"),
+        BotCommand("add", "Manual record: /add <amount> <cat> <desc>"),
+        BotCommand("setbalance", "Set asset balance: /setbalance <asset> <amount>"),
+        BotCommand("transfer", "Transfer: /transfer <from> <to> <amount>"),
+        BotCommand("help", "Show help message")
+    ]
+    await application.bot.set_my_commands(commands)
+    logger.info("Bot commands registered successfully.")
 
 def get_main_menu():
     """Returns a persistent reply keyboard."""
@@ -518,7 +532,7 @@ def main() -> None:
         logger.error("TELEGRAM_BOT_TOKEN not found!")
         return
         
-    application = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).post_init(post_init).build()
 
     # Add handlers
     application.add_handler(CommandHandler("start", start))
