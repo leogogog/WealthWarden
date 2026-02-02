@@ -30,7 +30,8 @@ class AIService:
         1. "RECORD": User wants to track an expense or income (e.g., "Lunch 50", "Taxi $20", receipt photo).
         2. "QUERY": User wants to know about their spending (e.g., "How much did I spend on food?", "Status report").
         3. "DELETE": User wants to remove a transaction (e.g., "Delete the last one", "Remove the taxi expense").
-        4. "CHAT": General conversation or unclear input.
+        4. "UPDATE_ASSET": User wants to update their asset balances (e.g., "Set Alipay to 5000", or a screenshot of asset distribution).
+        5. "CHAT": General conversation or unclear input.
 
         OUTPUT_FORMAT (JSON ONLY):
         
@@ -61,7 +62,20 @@ class AIService:
             "search_term": "<string, keywords to find the record, or null>"
         }}
 
-        CASE 4: CHAT
+        CASE 4: UPDATE_ASSET
+        {{
+            "intent": "UPDATE_ASSET",
+            "assets": [
+                {{
+                    "name": "<string, e.g., Alipay, ICBC Savings, Vanguard Fund>",
+                    "balance": <float>,
+                    "category": "<SAVINGS, FUND, FIXED_TERM, STOCK, CRYPTO, or OTHERS>",
+                    "currency": "<string, default {self.currency}>"
+                }}
+            ]
+        }}
+
+        CASE 5: CHAT
         {{
             "intent": "CHAT",
             "reply": "<string, helpful response>"

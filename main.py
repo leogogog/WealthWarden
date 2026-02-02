@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from telegram import Update, ForceReply
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from db.database import init_db, get_db
-from db.models import Transaction
+from db.models import Transaction, Asset
 from services.ai_service import AIService
 from services.analyzer import FinanceAnalyzer
 
@@ -143,7 +143,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             answer = await ai_service.generate_natural_response(text, data_summary)
             await update.message.reply_text(answer)
 
-        # --- CASE 3: DELETE ---
+        # --- CASE 4: UPDATE ASSET ---
+        elif intent == "UPDATE_ASSET":
+            assets_data = result.get("assets", [])
+            summary = await handle_asset_update(db, assets_data)
+            await update.message.reply_text(summary, parse_mode='Markdown')
+
+        # --- CASE 5: DELETE ---
         elif intent == "DELETE":
             target = result.get("target")
             search_term = result.get("search_term")
@@ -244,6 +250,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             await status_msg.edit_text(response_text, parse_mode='Markdown')
             
+        elif intent == "UPDATE_ASSET":
+            db = next(get_db())
+            assets_data = result.get("assets", [])
+            summary = await handle_asset_update(db, assets_data)
+            await status_msg.edit_text(summary, parse_mode='Markdown')
+
         elif intent == "QUERY":
              # Handle queries from image text (unlikely but possible)
              await status_msg.edit_text(f"I found this data: {result}")
@@ -287,6 +299,36 @@ def main() -> None:
 
     # Run the bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+async def handle_asset_update(db, assets_data):
+    """Helper to update multiple assets in DB and return summary."""
+    updated_names = []
+    for item in assets_data:
+        name = item.get("name")
+        balance = item.get("balance")
+        if not name or balance is None: continue
+        
+        asset = db.query(Asset).filter(Asset.name == name).first()
+        if not asset:
+            asset = Asset(
+                name=name,
+                category=item.get("category", "OTHERS"),
+                currency=item.get("currency", "CNY")
+            )
+            db.add(asset)
+        
+        asset.balance = float(balance)
+        if item.get("category"): asset.category = item.get("category")
+        if item.get("currency"): asset.currency = item.get("currency")
+        
+        updated_names.append(f"- *{name}*: {balance} {asset.currency}")
+    
+    db.commit()
+    
+    if not updated_names:
+        return "No assets identified to update."
+        
+    return "📈 *Assets Updated:*\n" + "\n".join(updated_names)
 
 if __name__ == "__main__":
     main()

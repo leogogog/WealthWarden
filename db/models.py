@@ -18,15 +18,16 @@ class Transaction(Base):
     def __repr__(self):
         return f"<Transaction(id={self.id}, amount={self.amount}, category='{self.category}')>"
 
-# Simple Asset tracking for now (e.g., "AAPL", "BTC")
+# Asset tracking (Savings, Funds, Investments, etc.)
 class Asset(Base):
     __tablename__ = "assets"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String, unique=True, index=True) # AAPL, BTC
-    name = Column(String)
-    quantity = Column(Float, default=0.0)
-    average_cost = Column(Float, default=0.0) # Simple average cost basis
+    name = Column(String, unique=True, index=True) # e.g., Alipay, ICBC, Fund 001
+    category = Column(String) # SAVINGS, FUND, FIXED_TERM, STOCK, CRYPTO, OTHERS
+    balance = Column(Float, default=0.0)
+    currency = Column(String, default="CNY")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     def __repr__(self):
-        return f"<Asset(symbol='{self.symbol}', quantity={self.quantity})>"
+        return f"<Asset(name='{self.name}', balance={self.balance}, category='{self.category}')>"

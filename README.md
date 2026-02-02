@@ -11,7 +11,8 @@ It tracks your expenses, income, and receipts, providing scientific financial an
 - **Smart Tracking**: Log expenses/income via text ("Lunch $50") or photo (receipts).
 - **Analysis**: Ask "How much did I spend on food?" or get a full monthly `/report`.
 - **Delete Records**: Just say "Delete the last transaction" or "Delete the taxi expense".
-- **Visuals**: Supports analyzing receipt images for automatic data entry.
+- **Asset Management**: Track and update account balances (Alipay, Bank, Funds) via text or screenshots.
+- **Visuals**: Supports analyzing receipt images and asset distribution screenshots.
 
 ## 🛠️ Quick Start
 
