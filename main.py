@@ -45,6 +45,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Commands:\n"
         "/start - Init bot\n"
         "/report - Get scientific analysis & prediction\n"
+        "/assets - Show all asset balances\n"
+        "/add <amount> <category> <desc> [asset] - Manual record\n"
+        "/setbalance <asset> <amount> - Set asset balance\n"
+        "/transfer <from> <to> <amount> - Transfer funds\n"
         "Or just send text/photos to log transactions!"
     )
 
@@ -86,6 +90,158 @@ async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.error(f"Error generating report: {e}")
         await status_msg.edit_text(f"Error: {str(e)}")
+
+async def handle_assets_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List all assets and their balances."""
+    if update.effective_user.id != ALLOWED_USER_ID: return
+    
+    db = next(get_db())
+    assets = db.query(Asset).all()
+    
+    if not assets:
+        await update.message.reply_text("No assets found. Use AI or /setbalance to create one.")
+        return
+    
+    msg = "🏦 *Current Assets:*\n\n"
+    total_cny = 0
+    for asset in assets:
+        msg += f"- *{asset.name}*: {asset.balance:.2f} {asset.currency} ({asset.category})\n"
+        if asset.currency == "CNY":
+            total_cny += asset.balance
+            
+    msg += f"\n💰 *Total (CNY):* {total_cny:.2f}"
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def handle_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manual add transaction: /add <amount> <category> <desc> [asset]"""
+    if update.effective_user.id != ALLOWED_USER_ID: return
+    
+    args = context.args
+    if len(args) < 3:
+        await update.message.reply_text("Usage: /add <amount> <category> <desc> [asset]")
+        return
+    
+    try:
+        amount = float(args[0])
+        category = args[1]
+        desc = args[2]
+        asset_name = args[3] if len(args) > 3 else None
+        
+        db = next(get_db())
+        tx_type = "INCOME" if amount > 0 else "EXPENSE"
+        abs_amount = abs(amount)
+        
+        # Link to asset if provided
+        asset_id = None
+        asset_msg = ""
+        if asset_name:
+            asset = db.query(Asset).filter(Asset.name.ilike(f"%{asset_name}%")).first()
+            if asset:
+                asset_id = asset.id
+                if tx_type == "EXPENSE":
+                    asset.balance -= abs_amount
+                else:
+                    asset.balance += abs_amount
+                asset_msg = f"\n📉 *{asset.name}* balance updated: {asset.balance:.2f}"
+        
+        new_tx = Transaction(
+            amount=abs_amount,
+            category=category,
+            description=desc,
+            type=tx_type,
+            asset_id=asset_id,
+            raw_text=f"[Manual] {' '.join(args)}"
+        )
+        db.add(new_tx)
+        db.commit()
+        
+        await update.message.reply_text(
+            f"✅ *Recorded {tx_type}*\n"
+            f"{category}: {abs_amount:.2f} CNY\n"
+            f"Desc: {desc}{asset_msg}",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def handle_setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set asset balance: /setbalance <asset> <amount> [category]"""
+    if update.effective_user.id != ALLOWED_USER_ID: return
+    
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /setbalance <asset> <amount> [category]")
+        return
+    
+    try:
+        name = args[0]
+        amount = float(args[1])
+        category = args[2].upper() if len(args) > 2 else "SAVINGS"
+        
+        db = next(get_db())
+        asset = db.query(Asset).filter(Asset.name.ilike(f"%{name}%")).first()
+        
+        if asset:
+            asset.balance = amount
+            if len(args) > 2: asset.category = category
+        else:
+            asset = Asset(name=name, balance=amount, category=category)
+            db.add(asset)
+            
+        db.commit()
+        await update.message.reply_text(f"✅ *{asset.name}* balance set to {amount:.2f} {asset.currency}", parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def handle_transfer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Transfer funds: /transfer <from> <to> <amount>"""
+    if update.effective_user.id != ALLOWED_USER_ID: return
+    
+    args = context.args
+    if len(args) < 3:
+        await update.message.reply_text("Usage: /transfer <from> <to> <amount>")
+        return
+    
+    try:
+        from_name = args[0]
+        to_name = args[1]
+        amount = float(args[2])
+        
+        db = next(get_db())
+        from_asset = db.query(Asset).filter(Asset.name.ilike(f"%{from_name}%")).first()
+        to_asset = db.query(Asset).filter(Asset.name.ilike(f"%{to_name}%")).first()
+        
+        if not from_asset or not to_asset:
+            await update.message.reply_text("Error: One or both asset accounts not found.")
+            return
+            
+        from_asset.balance -= amount
+        to_asset.balance += amount
+        
+        # Record as two transactions or a special TRANSFER type?
+        # For simplicity, just record a description
+        tx_from = Transaction(
+            amount=amount, category="TRANSFER", type="EXPENSE", 
+            description=f"Transfer to {to_asset.name}", asset_id=from_asset.id,
+            raw_text=f"Transfer {amount} from {from_asset.name} to {to_asset.name}"
+        )
+        tx_to = Transaction(
+            amount=amount, category="TRANSFER", type="INCOME", 
+            description=f"Transfer from {from_asset.name}", asset_id=to_asset.id,
+            raw_text=f"Transfer {amount} from {from_asset.name} to {to_asset.name}"
+        )
+        db.add(tx_from)
+        db.add(tx_to)
+        
+        db.commit()
+        await update.message.reply_text(
+            f"✅ *Transfer Complete*\n"
+            f"From: {from_asset.name} ({from_asset.balance:.2f})\n"
+            f"To: {to_asset.name} ({to_asset.balance:.2f})",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming text messages with Smart Intent."""
@@ -252,6 +408,10 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("report", handle_report))
+    application.add_handler(CommandHandler("assets", handle_assets_command))
+    application.add_handler(CommandHandler("add", handle_add_command))
+    application.add_handler(CommandHandler("setbalance", handle_setbalance_command))
+    application.add_handler(CommandHandler("transfer", handle_transfer_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
@@ -308,6 +468,22 @@ async def handle_dual_intent(update, context, result):
                 f"✅ *Recorded {tx_data.get('type')}*\n"
                 f"{tx_data.get('category')}: {tx_data.get('amount')} {tx_data.get('currency')}"
             )
+            
+            # 3. Handle Asset Link and Balance Update
+            asset_name = tx_data.get("asset_name")
+            if asset_name:
+                asset = db.query(Asset).filter(Asset.name.ilike(f"%{asset_name}%")).first()
+                if asset:
+                    new_tx.asset_id = asset.id
+                    # Update balance
+                    if tx_data.get('type') == 'EXPENSE':
+                        asset.balance -= tx_data.get('amount')
+                    elif tx_data.get('type') == 'INCOME':
+                        asset.balance += tx_data.get('amount')
+                    
+                    response_parts.append(f"📉 *{asset.name}* balance updated: {asset.balance:.2f} {asset.currency}")
+                else:
+                    response_parts.append(f"❓ Asset *{asset_name}* not found. Balance not updated.")
 
     # 2. Process Assets
     assets_data = result.get("assets")

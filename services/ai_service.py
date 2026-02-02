@@ -50,7 +50,8 @@ class AIService:
                 "currency": "<string, default {self.currency}>",
                 "category": "<string, e.g. Investment Yield, Food>",
                 "type": "<EXPENSE or INCOME>",
-                "description": "<string, e.g. Alipay Yield>"
+                "description": "<string, e.g. Alipay Yield>",
+                "asset_name": "<string, e.g. Alipay, WeChat, ICBC, Optional>"
             }},
             
             // OPTIONAL: If asset balances are found

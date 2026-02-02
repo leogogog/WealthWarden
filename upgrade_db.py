@@ -62,6 +62,19 @@ def upgrade_database():
                 else:
                     print(f"✅ '{col_name}' column exists.")
 
+        # 2. Check & Fix 'transactions' table
+        print("\nChecking 'transactions' table columns...")
+        cursor.execute("PRAGMA table_info(transactions)")
+        existing_tx_cols = {row[1]: row[2] for row in cursor.fetchall()}
+
+        if "asset_id" not in existing_tx_cols:
+            print("🛠 Adding missing 'asset_id' column to 'transactions'...")
+            cursor.execute("ALTER TABLE transactions ADD COLUMN asset_id INTEGER REFERENCES assets(id)")
+            conn.commit()
+            print("✅ Fixed: Added 'asset_id' column.")
+        else:
+            print("✅ 'asset_id' column exists.")
+
         print("\n🎉 Database upgrade completed successfully!")
         
     except Exception as e:

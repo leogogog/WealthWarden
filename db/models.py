@@ -14,6 +14,10 @@ class Transaction(Base):
     category = Column(String) # e.g., Food, Transport, Salary
     type = Column(String) # INCOME, EXPENSE, INVEST_IN, INVEST_OUT
     raw_text = Column(Text) # The original message from user
+    asset_id = Column(Integer, ForeignKey("assets.id"), nullable=True)
+
+    # Relationship to Asset
+    asset = relationship("Asset", back_populates="transactions")
 
     def __repr__(self):
         return f"<Transaction(id={self.id}, amount={self.amount}, category='{self.category}')>"
@@ -29,5 +33,8 @@ class Asset(Base):
     currency = Column(String, default="CNY")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # Relationship to Transactions
+    transactions = relationship("Transaction", back_populates="asset")
+
     def __repr__(self):
         return f"<Asset(name='{self.name}', balance={self.balance}, category='{self.category}')>"
