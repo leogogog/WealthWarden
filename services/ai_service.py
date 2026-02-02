@@ -32,9 +32,11 @@ class AIService:
         3. "QUERY" / "DELETE" / "CHAT": Standard actions.
         
         SPECIAL RULES FOR IMAGES (WEALTH DASHBOARDS):
-        - **DUAL RECOGNITION**: A dashboard often contains BOTH "Income/Yield" (Yesterday's Profit) AND "Total Assets". You must extract BOTH if present.
-        - **YIELD IS INCOME**: If you see "+1.34" or similar indicating "昨日收益" (Yesterday's Profit), record it as an **INCOME** transaction.
-        - **ASSETS**: Extract "Total Assets" (总资产) or specific holdings (Alipay, savings, funds). Map Chinese terms: "活期"->SAVINGS, "理财"->FUND.
+        - **DUAL EXTRACTION**: Many finance apps show "Today's Profit" (Income) and "Total Assets" (Balance) on the same screen. Extract BOTH if visible.
+        - **INTERPRET CONTEXT**: 
+            - Green/Red numbers with "+" or "-" usually indicate Income/Expense (Profit/Loss). Treat positive yields as **INCOME**.
+            - Large numbers labeled "Assets", "Balance", "Net Worth" are **ASSET** updates.
+        - **CATEGORY MAPPING**: Infer the category based on the text (e.g., "Funds" -> FUND, "Wallet" -> CASH, "Stock" -> STOCK). Do not rely on hardcoded lists.
         
         OUTPUT_FORMAT (JSON ONLY):
         Return a single JSON object. Keys `transaction_data` and `assets` can coexist.
