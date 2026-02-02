@@ -29,7 +29,10 @@ class Asset(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True) # e.g., Alipay, ICBC, Fund 001
     category = Column(String) # SAVINGS, FUND, FIXED_TERM, STOCK, CRYPTO, OTHERS
+    type = Column(String, default="LIQUID") # LIQUID, CREDIT, INVESTMENT, OTHER
     balance = Column(Float, default=0.0)
+    credit_limit = Column(Float, nullable=True) # For Credit Cards
+    billing_day = Column(Integer, nullable=True) # For Credit Cards
     currency = Column(String, default="CNY")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -37,4 +40,17 @@ class Asset(Base):
     transactions = relationship("Transaction", back_populates="asset")
 
     def __repr__(self):
-        return f"<Asset(name='{self.name}', balance={self.balance}, category='{self.category}')>"
+        return f"<Asset(name='{self.name}', balance={self.balance}, type='{self.type}')>"
+
+class Budget(Base):
+    __tablename__ = "budgets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    category = Column(String, unique=True, index=True)
+    limit_amount = Column(Float, nullable=False)
+    currency = Column(String, default="CNY")
+    alert_threshold = Column(Float, default=0.8) # Alert when 80% reached
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<Budget(category='{self.category}', limit={self.limit_amount})>"

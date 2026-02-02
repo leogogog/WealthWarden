@@ -133,18 +133,28 @@ class AIService:
         Generates advice based on a summary of recent finances.
         """
         prompt = f"""
-        You are a highly capable personal finance advisor. 
+        You are the user's Personal Chief Financial Officer (CFO).
         Analyze the following financial summary for the current month.
         
         Data:
         {financial_summary}
         
-        Please provide a "Scientific Financial Analysis" including:
-        1. Status Check: Are they saving enough? (Reference the 50/30/20 rule if applicable, though you may not have distinct Need/Want data, infer if possible or just comment on Savings Rate).
-        2. Prediction: Based on the daily average so far, predict the Total Expense by the end of the month.
-        3. Actionable Advice: 3 specific, brief tips to improve their financial health.
+        Please provide a professional, insight-driven analysis including:
         
-        Do not use any emojis in your response. Keep the tone professional yet encouraging.
+        1.  **Health Check & KPIs**:
+            *   **Savings Rate**: (Net / Income). Target > 20%.
+            *   **Liquid Coverage**: (Total Liquid Assets / Monthly Expense). How many months of runway do they have? (Target > 6 mo).
+            *   **Debt Status**: (Total Debt). Is it manageable vs Liquid Assets?
+            
+        2.  **Forecast**: Based on daily average, predict Month-End Total Expense.
+        
+        3.  **Proactive Strategy**:
+            *   Identify the largest expense category and suggest a specific % reduction target.
+            *   If Debt is high, suggest a repayment priority.
+            *   If Cash is high (>12 months runway), suggest investing more.
+        
+        Tone: Professional, direct, analytical. No emojis.
+        Structure: Use bullet points.
         """
         
         try:

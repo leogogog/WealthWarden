@@ -46,7 +46,10 @@ def upgrade_database():
                 ("category", "TEXT", "'OTHERS'"),
                 ("currency", "TEXT", "'CNY'"),
                 ("balance", "FLOAT", "0.0"),
-                ("updated_at", "DATETIME", "CURRENT_TIMESTAMP")
+                ("updated_at", "DATETIME", "CURRENT_TIMESTAMP"),
+                ("type", "TEXT", "'LIQUID'"),
+                ("credit_limit", "FLOAT", "NULL"),
+                ("billing_day", "INTEGER", "NULL")
             ]
             
             for col_name, col_type, default_val in required_columns:
@@ -74,6 +77,28 @@ def upgrade_database():
             print("✅ Fixed: Added 'asset_id' column.")
         else:
             print("✅ 'asset_id' column exists.")
+
+        # 3. Create 'budgets' table if not exists
+        print("\nChecking 'budgets' table...")
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='budgets'")
+        if not cursor.fetchone():
+            print("🛠 Creating 'budgets' table...")
+            cursor.execute("""
+                CREATE TABLE budgets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category VARCHAR UNIQUE,
+                    limit_amount FLOAT NOT NULL,
+                    currency VARCHAR DEFAULT 'CNY',
+                    alert_threshold FLOAT DEFAULT 0.8,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX ix_budgets_category ON budgets (category)")
+            cursor.execute("CREATE INDEX ix_budgets_id ON budgets (id)")
+            conn.commit()
+            print("✅ Fixed: Created 'budgets' table.")
+        else:
+            print("✅ 'budgets' table exists.")
 
         print("\n🎉 Database upgrade completed successfully!")
         

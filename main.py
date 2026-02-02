@@ -42,11 +42,15 @@ async def post_init(application: Application) -> None:
     """Register bot commands with Telegram."""
     commands = [
         BotCommand("start", "Init bot and show menu"),
-        BotCommand("assets", "Show all asset balances"),
+        BotCommand("wallet", "Manage assets & liabilities"),
         BotCommand("report", "Get monthly report"),
         BotCommand("add", "Manual record: /add <amount> <cat> <desc>"),
         BotCommand("setbalance", "Set asset balance: /setbalance <asset> <amount>"),
+        BotCommand("setbalance", "Set asset balance: /setbalance <asset> <amount>"),
         BotCommand("transfer", "Transfer: /transfer <from> <to> <amount>"),
+        BotCommand("log", "Log transaction (Guided)"),
+        BotCommand("history", "View last 10 transactions"),
+        BotCommand("export", "Export data to CSV"),
         BotCommand("help", "Show help message")
     ]
     await application.bot.set_my_commands(commands)
@@ -55,8 +59,9 @@ async def post_init(application: Application) -> None:
 def get_main_menu():
     """Returns a persistent reply keyboard."""
     keyboard = [
-        ["Assets", "Report"],
-        ["Add Record", "Help"]
+        ["Wallet", "Log Transaction"],
+        ["Budget", "Analytics"],
+        ["History", "More"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -94,16 +99,20 @@ async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await status_msg.edit_text("No data found for this month yet! Start logging first.")
             return
 
-        # 2. Get AI Analysis (ASYNC)
+        # 2. Get Weekly Trend
+        trend = analyzer.get_weekly_trend()
+        
+        # 3. Get AI Analysis (ASYNC)
         analysis = await ai_service.get_financial_advice(summary_text)
         
-        # 3. Format Output
+        # 4. Format Output
         final_reply = (
             f"Monthly Report: {stats['period']}\n\n"
             f"Income: {stats['total_income']:.2f}\n"
             f"Expense: {stats['total_expense']:.2f}\n"
             f"Daily Avg: {stats['daily_average']:.2f}\n"
             f"Net: {stats['net_savings']:.2f}\n\n"
+            f"{trend}\n\n"
             f"AI Analysis & Prediction:\n"
             f"{analysis}"
         )
@@ -114,33 +123,70 @@ async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Error generating report: {e}")
         await status_msg.edit_text(f"Error: {str(e)}")
 
-async def handle_assets_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all assets and their balances."""
+async def handle_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Advanced Asset View: Assets vs Liabilities, Net Worth."""
     if update.effective_user.id != ALLOWED_USER_ID: return
     
     db = next(get_db())
     assets = db.query(Asset).all()
     
     if not assets:
-        await update.message.reply_text("No assets found. Use AI or /setbalance to create one.")
+        await update.message.reply_text("No assets found. Use /setbalance to create one (e.g. '/setbalance Alipay 500 LIQUID')")
         return
+
+    liquid_assets = []
+    credit_liabilities = []
+    investments = []
     
-    msg = "Current Assets:\n\n"
-    total_cny = 0
+    total_liquid = 0.0
+    total_debt = 0.0
+    total_invest = 0.0
     
     for asset in assets:
-        msg += f"- *{asset.name}*: {asset.balance:.2f} {asset.currency}\n"
-        if asset.currency == "CNY":
-            total_cny += asset.balance
-            
-    msg += f"\nTotal (CNY): {total_cny:.2f}"
+        if asset.type == 'CREDIT':
+            credit_liabilities.append(asset)
+            total_debt += asset.balance # For Credit Cards, balance is usually positive debt
+        elif asset.type == 'INVESTMENT':
+            investments.append(asset)
+            total_invest += asset.balance
+        else: # LIQUID or OTHERS
+            liquid_assets.append(asset)
+            total_liquid += asset.balance
+
+    # Net Worth = (Liquid + Invest) - Debt
+    net_worth = (total_liquid + total_invest) - total_debt
     
-    # Inline keyboard for quick actions
+    msg = "Wallet Overview\n\n"
+    
+    if liquid_assets:
+        msg += "*Liquid Assets:*\n"
+        for a in liquid_assets:
+            msg += f"- {a.name}: {a.balance:,.2f}\n"
+        msg += f"Total: {total_liquid:,.2f}\n\n"
+        
+    if investments:
+        msg += "*Investments:*\n"
+        for a in investments:
+            msg += f"- {a.name}: {a.balance:,.2f}\n"
+        msg += f"Total: {total_invest:,.2f}\n\n"
+        
+    if credit_liabilities:
+        msg += "*Liabilities (Credit Cards):*\n"
+        for a in credit_liabilities:
+            msg += f"- {a.name}: {a.balance:,.2f}\n"
+        msg += f"Total Debt: {total_debt:,.2f}\n\n"
+    
+    msg += "------------------------\n"
+    msg += f"Net Worth: {net_worth:,.2f} {assets[0].currency if assets else 'CNY'}\n"
+
+    # Inline Keyboard
     keyboard = []
+    # Add row for common actions
+    keyboard.append([InlineKeyboardButton("Transfer / Pay Bill", callback_data="btn_transfer")])
+    
     for asset in assets:
         keyboard.append([
-            InlineKeyboardButton(f"Update {asset.name}", callback_data=f"upd_{asset.id}"),
-            InlineKeyboardButton(f"Transfer from {asset.name}", callback_data=f"tf_{asset.id}")
+             InlineKeyboardButton(f"Manage {asset.name}", callback_data=f"upd_{asset.id}")
         ])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -165,16 +211,120 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             context.user_data['expect_balance_for'] = asset_id
 
-    elif data.startswith("tf_"):
-        asset_id = int(data.split("_")[1])
+    elif data == "btn_transfer":
+        await query.message.reply_text(
+             "Transfer from where to where?\nFormat: `/transfer <from> <to> <amount>`",
+             parse_mode='Markdown'
+        )
+
+    elif data.startswith("sel_src_"):
+        # Source Selected for Log Flow
+        asset_id = int(data.split("_")[2])
+        tx_data = context.user_data.get('log_data')
+        
+        if not tx_data:
+            await query.message.edit_text("Transaction session expired. Please start over.")
+            return
+
+        db = next(get_db())
         asset = db.get(Asset, asset_id)
+        
         if asset:
-            await query.message.reply_text(
-                f"Transfer from *{asset.name}* to where?\nFormat: `<target_asset> <amount>`",
-                parse_mode='Markdown',
-                reply_markup=ForceReply(selective=True)
+            amount = tx_data['amount']
+            category = tx_data['category']
+            desc = tx_data['desc']
+            
+            # Logic: 
+            # If Asset Type is CREDIT -> Expense adds to balance (Debt goes up)
+            # If Asset Type is LIQUID -> Expense removes from balance
+            # Income is reverse
+            
+            # Standardizing: Expense is always negative in net worth context, 
+            # but for Credit Card tracking, we usually want positive balance = debt.
+            # Let's stick to the plan:
+            # Credit Card: Expenses increase balance.
+            # Liquid: Expenses decrease balance.
+            
+            if tx_data['type'] == 'EXPENSE':
+                if asset.type == 'CREDIT':
+                    asset.balance += amount
+                else:
+                    asset.balance -= amount
+            else: # INCOME
+                 if asset.type == 'CREDIT':
+                    asset.balance -= amount # Refund/Payment reduces debt
+                 else:
+                    asset.balance += amount
+
+            new_tx = Transaction(
+                amount=amount,
+                category=category,
+                description=desc,
+                type=tx_data['type'],
+                asset_id=asset.id,
+                raw_text=f"[Guided] {amount} {category} via {asset.name}"
             )
-            context.user_data['expect_transfer_from'] = asset_id
+            db.add(new_tx)
+            db.commit()
+            
+            await query.message.edit_text(
+                f"Recorded {tx_data['type']}\n"
+                f"{category}: {amount:.2f}\n"
+                f"Via: {asset.name} ({asset.type})\n"
+                f"New Balance: {asset.balance:.2f}"
+            )
+            # Clear state
+            context.user_data.pop('log_data', None)
+        else:
+             await query.message.edit_text("Asset not found.")
+
+    elif data.startswith("tf_"):
+        # Deprecated logic, supporting just in case
+        await query.message.reply_text("Please use /transfer command.")
+
+    elif data.startswith("del_"):
+        # 1. Ask for confirmation
+        tx_id = data.split("_")[1]
+        keyboard = [
+            [
+                InlineKeyboardButton("Yes, Delete", callback_data=f"cfm_del_{tx_id}"),
+                InlineKeyboardButton("Cancel", callback_data="cancel_del")
+            ]
+        ]
+        await query.message.reply_text(
+            "⚠️ Are you sure you want to delete this transaction?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data.startswith("cfm_del_"):
+        # 2. Perform Deletion
+        tx_id = int(data.split("_")[2])
+        # We need to fetch it to revert balance
+        tx = db.get(Transaction, tx_id)
+        if tx:
+            # Revert Balance Logic
+            if tx.asset_id:
+                asset = db.get(Asset, tx.asset_id)
+                if asset:
+                    if tx.type == "EXPENSE":
+                        if asset.type == 'CREDIT':
+                            asset.balance -= tx.amount # Reverse credit charge
+                        else:
+                            asset.balance += tx.amount # Refund to liquid
+                    elif tx.type == "INCOME":
+                        if asset.type == 'CREDIT':
+                            asset.balance += tx.amount 
+                        else:
+                            asset.balance -= tx.amount
+            
+            db.delete(tx)
+            db.commit()
+            await query.message.edit_text(f"Transaction {tx_id} deleted and balance reverted.")
+        else:
+            await query.message.edit_text("Transaction not found or already deleted.")
+
+    elif data == "cancel_del":
+        await query.message.edit_text("Deletion cancelled.")
 
 async def handle_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manual add transaction: /add <amount> <category> <desc> [asset]"""
@@ -206,7 +356,7 @@ async def handle_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     asset.balance -= abs_amount
                 else:
                     asset.balance += abs_amount
-                asset_msg = f"\n📉 *{asset.name}* balance updated: {asset.balance:.2f}"
+                asset_msg = f"\n{asset.name} balance updated: {asset.balance:.2f}"
         
         new_tx = Transaction(
             amount=abs_amount,
@@ -247,9 +397,11 @@ async def handle_setbalance_command(update: Update, context: ContextTypes.DEFAUL
         
         if asset:
             asset.balance = amount
-            if len(args) > 2: asset.category = category
+            if len(args) > 2: asset.type = category.upper() # Treat 3rd arg as TYPE in new design
         else:
-            asset = Asset(name=name, balance=amount, category=category)
+            # Default type LIQUID unless specified
+            asset_type = category.upper() if len(args) > 2 else "LIQUID"
+            asset = Asset(name=name, balance=amount, category="General", type=asset_type)
             db.add(asset)
             
         db.commit()
@@ -279,8 +431,16 @@ async def handle_transfer_command(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("Error: One or both asset accounts not found.")
             return
             
-        from_asset.balance -= amount
-        to_asset.balance += amount
+        # Logic update for Liability/Credit
+        if from_asset.type == 'CREDIT':
+            from_asset.balance += amount # Cash advance increases debt
+        else:
+            from_asset.balance -= amount
+            
+        if to_asset.type == 'CREDIT':
+            to_asset.balance -= amount # Paying credit reduces debt
+        else:
+            to_asset.balance += amount
         
         # Record as two transactions or a special TRANSFER type?
         # For simplicity, just record a description
@@ -306,6 +466,108 @@ async def handle_transfer_command(update: Update, context: ContextTypes.DEFAULT_
         )
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
+
+async def handle_history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show last 10 transactions with delete option."""
+    if update.effective_user.id != ALLOWED_USER_ID: return
+    
+    db = next(get_db())
+    txs = db.query(Transaction).order_by(Transaction.date.desc()).limit(10).all()
+    
+    if not txs:
+        await update.message.reply_text("No transactions found.")
+        return
+        
+    await update.message.reply_text("Last 10 Transactions:")
+    
+    for tx in txs:
+        # Inline button for each? Too many messages.
+        # Better: List them, and provide a /delete <id> command or just a simplified view.
+        # Professional UI: Send a message for each? No, spammy.
+        # Compromise: Text list, with [Delete] button using a callback that prompts for ID?
+        # Actually, let's just make the LAST 5 interactive.
+        pass
+
+    for i, tx in enumerate(txs[:5]): # Only show buttons for top 5 to avoid clutter
+        keyboard = [[InlineKeyboardButton("Delete", callback_data=f"del_{tx.id}")]]
+        msg = f"{tx.date.strftime('%Y-%m-%d')} | {tx.category} | {tx.amount} {tx.currency}\n{tx.description or ''}"
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def handle_export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Export all transactions to CSV."""
+    if update.effective_user.id != ALLOWED_USER_ID: return
+    
+    import csv
+    from io import StringIO
+    
+    db = next(get_db())
+    txs = db.query(Transaction).order_by(Transaction.date.desc()).all()
+    
+    if not txs:
+        await update.message.reply_text("No data to export.")
+        return
+        
+    await update.message.reply_text("Generating CSV...")
+    
+    # Create CSV in memory
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['ID', 'Date', 'Type', 'Category', 'Amount', 'Currency', 'Description', 'Asset', 'Raw Text'])
+    
+    for tx in txs:
+        asset_name = tx.asset.name if tx.asset else "N/A"
+        writer.writerow([
+            tx.id, tx.date, tx.type, tx.category, tx.amount, tx.currency, 
+            tx.description, asset_name, tx.raw_text
+        ])
+        
+    output.seek(0)
+    
+    # Send as document
+    # Need bytes
+    from io import BytesIO
+    bytes_output = BytesIO(output.getvalue().encode('utf-8'))
+    filename = f"transactions_{datetime.now().strftime('%Y%m%d')}.csv"
+    
+    await update.message.reply_document(document=bytes_output, filename=filename)
+
+
+async def handle_budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """View status or set budget: /budget <category> <limit>"""
+    if update.effective_user.id != ALLOWED_USER_ID: return
+    
+    args = context.args
+    db = next(get_db())
+    from db.models import Budget
+    
+    # Mode 1: View Status
+    if not args:
+        analyzer = FinanceAnalyzer(db)
+        report = analyzer.get_budget_status()
+        await update.message.reply_text(report, parse_mode='Markdown')
+        return
+        
+    # Mode 2: Set Budget
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /budget <category> <limit>")
+        return
+        
+    category = args[0]
+    try:
+        limit = float(args[1])
+        budget = db.query(Budget).filter(Budget.category.ilike(category)).first()
+        if budget:
+            budget.limit_amount = limit
+        else:
+            budget = Budget(category=category, limit_amount=limit)
+            db.add(budget)
+            
+        db.commit()
+        await update.message.reply_text(f"Budget for {category} set to {limit:.2f}")
+    except ValueError:
+        await update.message.reply_text("Invalid limit amount.")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming text messages with Smart Intent."""
@@ -351,8 +613,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 to_asset = db.query(Asset).filter(Asset.name.ilike(f"%{target_name}%")).first()
                 
                 if from_asset and to_asset:
-                    from_asset.balance -= amount
-                    to_asset.balance += amount
+                    # Logic update for Liability/Credit
+                    if from_asset.type == 'CREDIT':
+                        from_asset.balance += amount
+                    else:
+                        from_asset.balance -= amount
+                        
+                    if to_asset.type == 'CREDIT':
+                        to_asset.balance -= amount
+                    else:
+                        to_asset.balance += amount
+                        
                     db.commit()
                     await update.message.reply_text(
                         f"Transferred {amount} from {from_asset.name} to {to_asset.name}.\n"
@@ -366,15 +637,71 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await update.message.reply_text("Invalid amount.")
                 return
 
+        # Case 3: Log Transaction Details
+        if context.user_data.get('expect_log_details'):
+            parts = text.split(maxsplit=1)
+            try:
+                amount = float(parts[0])
+                rest = parts[1] if len(parts) > 1 else "General"
+                
+                # Simple parsing: first word after number is category? 
+                # Let's say: "50 Lunch at McD" -> Cat: Lunch, Desc: at McD
+                cat_parts = rest.split(maxsplit=1)
+                category = cat_parts[0]
+                desc = cat_parts[1] if len(cat_parts) > 1 else ""
+                
+                context.user_data['log_data'] = {
+                    'amount': abs(amount),
+                    'type': 'EXPENSE' if amount > 0 else 'INCOME', # Assuming user types positive for expense in this flow?
+                    # Actually, let's assume positive input = Expense unless specified otherwise
+                    # Or simpler: always Expense for now, unless /add used
+                    'category': category,
+                    'desc': desc
+                }
+                context.user_data.pop('expect_log_details')
+                
+                # Ask for Source
+                db = next(get_db())
+                assets = db.query(Asset).all()
+                keyboard = []
+                for a in assets:
+                    keyboard.append([InlineKeyboardButton(f"{a.name} ({a.type})", callback_data=f"sel_src_{a.id}")])
+                
+                await update.message.reply_text(
+                    f"Got it: {amount} for {category}.\nSelect Payment Source:",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                return
+            except ValueError:
+                await update.message.reply_text("Invalid format. Please start with a number (e.g. '50 Lunch').")
+                return
+
     # Handle Main Menu Buttons
-    if text == "Assets":
-        await handle_assets_command(update, context)
+    if text == "Wallet":
+        await handle_wallet_command(update, context)
+        return
+    elif text == "Log Transaction":
+        await update.message.reply_text("Enter amount and category (e.g., '50 Lunch'):")
+        context.user_data['expect_log_details'] = True
         return
     elif text == "Report":
         await handle_report(update, context)
         return
     elif text == "Add Record":
         await update.message.reply_text("Just send me a message like 'Lunch 50' or 'Payday 5000 via Alipay'")
+        return
+    elif text == "Budget":
+        await handle_budget_command(update, context)
+        return
+    elif text == "Analytics":
+        # Redirect to Report for now, which includes trends
+        await handle_report(update, context)
+        return
+    elif text == "History":
+        await handle_history_command(update, context)
+        return
+    elif text == "More":
+        await update.message.reply_text("More commands: /export, /start, /setbalance")
         return
     elif text == "Help":
         await help_command(update, context)
@@ -538,7 +865,10 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("report", handle_report))
-    application.add_handler(CommandHandler("assets", handle_assets_command))
+    application.add_handler(CommandHandler("wallet", handle_wallet_command))
+    application.add_handler(CommandHandler("budget", handle_budget_command))
+    application.add_handler(CommandHandler("history", handle_history_command))
+    application.add_handler(CommandHandler("export", handle_export_command))
     application.add_handler(CommandHandler("add", handle_add_command))
     application.add_handler(CommandHandler("setbalance", handle_setbalance_command))
     application.add_handler(CommandHandler("transfer", handle_transfer_command))
