@@ -24,6 +24,7 @@ class AIService:
         
         prompt = f"""
         You are a smart financial assistant. Analyze the user's input (Text or Image).
+        Do not use any emojis in your response.
         Current Date: {current_date}
         
         Determine the INTENT (Can be MIXED):
@@ -113,6 +114,7 @@ class AIService:
         {data_summmary}
         
         Task: Answer the user's question naturally using the data provided. 
+        Do not use any emojis in your response.
         If it's a question like "How much did I spend?", give the number and maybe a brief comment.
         If the data is empty or zero, say so politely.
         """
@@ -138,11 +140,11 @@ class AIService:
         {financial_summary}
         
         Please provide a "Scientific Financial Analysis" including:
-        1. **Status Check**: Are they saving enough? (Reference the 50/30/20 rule if applicable, though you may not have distinct Need/Want data, infer if possible or just comment on Savings Rate).
-        2. **Prediction**: Based on the daily average so far, predict the Total Expense by the end of the month.
-        3. **Actionable Advice**: 3 specific, brief tips to improve their financial health.
+        1. Status Check: Are they saving enough? (Reference the 50/30/20 rule if applicable, though you may not have distinct Need/Want data, infer if possible or just comment on Savings Rate).
+        2. Prediction: Based on the daily average so far, predict the Total Expense by the end of the month.
+        3. Actionable Advice: 3 specific, brief tips to improve their financial health.
         
-        Keep the tone professional yet encouraging. Use emoji bullets.
+        Do not use any emojis in your response. Keep the tone professional yet encouraging.
         """
         
         try:

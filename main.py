@@ -3,8 +3,8 @@ import os
 import asyncio
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from telegram import Update, ForceReply
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from db.database import init_db, get_db
 from db.models import Transaction, Asset
 from services.ai_service import AIService
@@ -33,9 +33,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return # Silent ignore for unauthorized users
         
     await update.message.reply_html(
-        f"Hi {user.mention_html()}! I'm your Personal Finance Bot. 🤖\n"
-        f"Send me any expense, income, or receipt photo, and I'll track it for you."
+        f"Hi {user.mention_html()}! I'm your Personal Finance Bot.\n"
+        f"Send me any expense, income, or receipt photo, and I'll track it for you.",
+        reply_markup=get_main_menu()
     )
+
+def get_main_menu():
+    """Returns a persistent reply keyboard."""
+    keyboard = [
+        ["Assets", "Report"],
+        ["Add Record", "Help"]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -56,7 +65,7 @@ async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Generates a financial report and analysis."""
     if update.effective_user.id != ALLOWED_USER_ID: return
     
-    status_msg = await update.message.reply_text("Crunching the numbers... 📊")
+    status_msg = await update.message.reply_text("Crunching the numbers...")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     try:
@@ -76,12 +85,12 @@ async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         
         # 3. Format Output
         final_reply = (
-            f"📊 *Monthly Report: {stats['period']}*\n\n"
-            f"💰 *Income:* {stats['total_income']:.2f}\n"
-            f"💸 *Expense:* {stats['total_expense']:.2f}\n"
-            f"📉 *Daily Avg:* {stats['daily_average']:.2f}\n"
-            f"🏦 *Net:* {stats['net_savings']:.2f}\n\n"
-            f"🧠 *AI Analysis & Prediction:*\n"
+            f"Monthly Report: {stats['period']}\n\n"
+            f"Income: {stats['total_income']:.2f}\n"
+            f"Expense: {stats['total_expense']:.2f}\n"
+            f"Daily Avg: {stats['daily_average']:.2f}\n"
+            f"Net: {stats['net_savings']:.2f}\n\n"
+            f"AI Analysis & Prediction:\n"
             f"{analysis}"
         )
         
@@ -102,15 +111,56 @@ async def handle_assets_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("No assets found. Use AI or /setbalance to create one.")
         return
     
-    msg = "🏦 *Current Assets:*\n\n"
+    msg = "Current Assets:\n\n"
     total_cny = 0
+    
     for asset in assets:
-        msg += f"- *{asset.name}*: {asset.balance:.2f} {asset.currency} ({asset.category})\n"
+        msg += f"- *{asset.name}*: {asset.balance:.2f} {asset.currency}\n"
         if asset.currency == "CNY":
             total_cny += asset.balance
             
-    msg += f"\n💰 *Total (CNY):* {total_cny:.2f}"
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    msg += f"\nTotal (CNY): {total_cny:.2f}"
+    
+    # Inline keyboard for quick actions
+    keyboard = []
+    for asset in assets:
+        keyboard.append([
+            InlineKeyboardButton(f"Update {asset.name}", callback_data=f"upd_{asset.id}"),
+            InlineKeyboardButton(f"Transfer from {asset.name}", callback_data=f"tf_{asset.id}")
+        ])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle button clicks."""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    db = next(get_db())
+    
+    if data.startswith("upd_"):
+        asset_id = int(data.split("_")[1])
+        asset = db.get(Asset, asset_id)
+        if asset:
+            await query.message.reply_text(
+                f"How much is currently in *{asset.name}*?\n(Reply with a number)",
+                parse_mode='Markdown',
+                reply_markup=ForceReply(selective=True)
+            )
+            context.user_data['expect_balance_for'] = asset_id
+
+    elif data.startswith("tf_"):
+        asset_id = int(data.split("_")[1])
+        asset = db.get(Asset, asset_id)
+        if asset:
+            await query.message.reply_text(
+                f"Transfer from *{asset.name}* to where?\nFormat: `<target_asset> <amount>`",
+                parse_mode='Markdown',
+                reply_markup=ForceReply(selective=True)
+            )
+            context.user_data['expect_transfer_from'] = asset_id
 
 async def handle_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manual add transaction: /add <amount> <category> <desc> [asset]"""
@@ -156,7 +206,7 @@ async def handle_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         db.commit()
         
         await update.message.reply_text(
-            f"✅ *Recorded {tx_type}*\n"
+            f"Recorded {tx_type}\n"
             f"{category}: {abs_amount:.2f} CNY\n"
             f"Desc: {desc}{asset_msg}",
             parse_mode='Markdown'
@@ -189,7 +239,7 @@ async def handle_setbalance_command(update: Update, context: ContextTypes.DEFAUL
             db.add(asset)
             
         db.commit()
-        await update.message.reply_text(f"✅ *{asset.name}* balance set to {amount:.2f} {asset.currency}", parse_mode='Markdown')
+        await update.message.reply_text(f"Asset {asset.name} balance set to {amount:.2f} {asset.currency}", parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -235,7 +285,7 @@ async def handle_transfer_command(update: Update, context: ContextTypes.DEFAULT_
         
         db.commit()
         await update.message.reply_text(
-            f"✅ *Transfer Complete*\n"
+            f"Transfer Complete\n"
             f"From: {from_asset.name} ({from_asset.balance:.2f})\n"
             f"To: {to_asset.name} ({to_asset.balance:.2f})",
             parse_mode='Markdown'
@@ -250,6 +300,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     text = update.message.text
+    
+    # Check for ForceReply responses
+    if update.message.reply_to_message and update.message.reply_to_message.text:
+        reply_to_text = update.message.reply_to_message.text
+        db = next(get_db())
+
+        # Case 1: Updating Balance
+        if "expect_balance_for" in context.user_data:
+            try:
+                asset_id = context.user_data.pop('expect_balance_for')
+                new_balance = float(text)
+                asset = db.get(Asset, asset_id)
+                if asset:
+                    asset.balance = new_balance
+                    db.commit()
+                    await update.message.reply_text(f"Asset {asset.name} balance updated to {new_balance:.2f}", parse_mode='Markdown')
+                    return
+            except ValueError:
+                await update.message.reply_text("Please enter a valid number.")
+                return
+
+        # Case 2: Transferring
+        if "expect_transfer_from" in context.user_data:
+            try:
+                from_id = context.user_data.pop('expect_transfer_from')
+                parts = text.split()
+                if len(parts) < 2:
+                    await update.message.reply_text("Invalid format. Use: `<to_asset> <amount>`")
+                    return
+                
+                target_name = parts[0]
+                amount = float(parts[1])
+                
+                from_asset = db.get(Asset, from_id)
+                to_asset = db.query(Asset).filter(Asset.name.ilike(f"%{target_name}%")).first()
+                
+                if from_asset and to_asset:
+                    from_asset.balance -= amount
+                    to_asset.balance += amount
+                    db.commit()
+                    await update.message.reply_text(
+                        f"Transferred {amount} from {from_asset.name} to {to_asset.name}.\n"
+                        f"New balances: {from_asset.name}: {from_asset.balance:.2f}, {to_asset.name}: {to_asset.balance:.2f}"
+                    )
+                    return
+                else:
+                    await update.message.reply_text("Target asset not found.")
+                    return
+            except ValueError:
+                await update.message.reply_text("Invalid amount.")
+                return
+
+    # Handle Main Menu Buttons
+    if text == "Assets":
+        await handle_assets_command(update, context)
+        return
+    elif text == "Report":
+        await handle_report(update, context)
+        return
+    elif text == "Add Record":
+        await update.message.reply_text("Just send me a message like 'Lunch 50' or 'Payday 5000 via Alipay'")
+        return
+    elif text == "Help":
+        await help_command(update, context)
+        return
+
     # REMOVED: status_msg = await update.message.reply_text("Thinking... 🤔")
     # Instead, use typing action which is non-intrusive
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -340,7 +456,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Handle incoming photos (receipts, etc)."""
     if update.effective_user.id != ALLOWED_USER_ID: return
     
-    status_msg = await update.message.reply_text("Analyzing image... 🖼️")
+    status_msg = await update.message.reply_text("Analyzing image...")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     try:
@@ -412,6 +528,7 @@ def main() -> None:
     application.add_handler(CommandHandler("add", handle_add_command))
     application.add_handler(CommandHandler("setbalance", handle_setbalance_command))
     application.add_handler(CommandHandler("transfer", handle_transfer_command))
+    application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
@@ -450,7 +567,7 @@ async def handle_dual_intent(update, context, result):
         processed_any = True
         
         if is_duplicate_transaction(db, tx_data):
-            response_parts.append(f"⚠️ *Skipped Duplicate*: {tx_data.get('type')} {tx_data.get('amount')} (recorded recently)")
+            response_parts.append(f"Skipped Duplicate: {tx_data.get('type')} {tx_data.get('amount')} (recorded recently)")
         else:
             new_tx = Transaction(
                 amount=tx_data.get('amount'),
@@ -465,7 +582,7 @@ async def handle_dual_intent(update, context, result):
             db.commit() 
             
             response_parts.append(
-                f"✅ *Recorded {tx_data.get('type')}*\n"
+                f"Recorded {tx_data.get('type')}\n"
                 f"{tx_data.get('category')}: {tx_data.get('amount')} {tx_data.get('currency')}"
             )
             
@@ -481,9 +598,9 @@ async def handle_dual_intent(update, context, result):
                     elif tx_data.get('type') == 'INCOME':
                         asset.balance += tx_data.get('amount')
                     
-                    response_parts.append(f"📉 *{asset.name}* balance updated: {asset.balance:.2f} {asset.currency}")
+                    response_parts.append(f"Asset {asset.name} balance updated: {asset.balance:.2f} {asset.currency}")
                 else:
-                    response_parts.append(f"❓ Asset *{asset_name}* not found. Balance not updated.")
+                    response_parts.append(f"Asset {asset_name} not found. Balance not updated.")
 
     # 2. Process Assets
     assets_data = result.get("assets")
@@ -527,15 +644,15 @@ async def handle_asset_update(db, assets_data):
             )
             db.add(asset)
         
-        updated_names.append(f"- *{name}*: {new_balance} {asset.currency}")
+        updated_names.append(f"- {name}: {new_balance} {asset.currency}")
     
     db.commit()
     
     response = ""
     if updated_names:
-        response += "📈 *Assets Updated:*\n" + "\n".join(updated_names) + "\n\n"
+        response += "Assets Updated:\n" + "\n".join(updated_names) + "\n\n"
     if skipped_names:
-        response += "🆗 *Unchanged*: " + ", ".join(skipped_names)
+        response += "Unchanged: " + ", ".join(skipped_names)
     
     if not response:
         return "No asset data found or all up to date."
