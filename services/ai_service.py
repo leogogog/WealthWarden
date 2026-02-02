@@ -5,11 +5,12 @@ import asyncio
 from datetime import datetime
 
 class AIService:
-    def __init__(self):
+    def __init__(self, currency="CNY"):
         self.api_key = os.getenv("GEMINI_API_KEY")
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY not found in environment variables")
         
+        self.currency = currency
         # Initialize the new Client
         self.client = genai.Client(api_key=self.api_key)
         # Switch to Gemini 2.0 Flash for speed and efficiency
@@ -38,7 +39,7 @@ class AIService:
             "intent": "RECORD",
             "transaction_data": {{
                 "amount": <float>,
-                "currency": "<string, default CNY>",
+                "currency": "<string, default {self.currency}>",
                 "category": "<string, e.g., Food, Transport, Salary, Shopping, Others>",
                 "type": "<EXPENSE or INCOME>",
                 "description": "<string, brief description>"

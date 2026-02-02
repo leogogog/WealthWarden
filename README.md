@@ -30,6 +30,7 @@ Edit `.env` and fill in your keys:
 TELEGRAM_BOT_TOKEN=your_token_here
 GEMINI_API_KEY=your_gemini_key_here
 ALLOWED_USER_ID=123456789  # Your Telegram User ID
+DEFAULT_CURRENCY=CNY       # Default currency (CNY, USD, EUR, etc.)
 ```
 
 ### 2. Run with Docker (Recommended)

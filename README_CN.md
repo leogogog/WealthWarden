@@ -30,6 +30,7 @@ cp .env.example .env
 TELEGRAM_BOT_TOKEN=您的bot_token
 GEMINI_API_KEY=您的gemini_key
 ALLOWED_USER_ID=123456789  # 您的 Telegram User ID
+DEFAULT_CURRENCY=CNY       # 默认货币 (CNY, USD, EUR 等)
 ```
 
 ### 2. 使用 Docker 运行 (推荐)

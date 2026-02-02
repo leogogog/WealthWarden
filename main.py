@@ -264,8 +264,9 @@ def main() -> None:
     init_db()
     
     # Initialize AI
+    default_currency = os.getenv("DEFAULT_CURRENCY", "CNY")
     try:
-        ai_service = AIService()
+        ai_service = AIService(currency=default_currency)
     except Exception as e:
         logger.error(f"Failed to init AI Service: {e}")
         return
