@@ -1,0 +1,11 @@
+services:
+  finance-bot:
+    build: .
+    container_name: finance_bot
+    restart: always # This ensures it runs as a service and restarts on boot/failure
+    volumes:
+      - ./data:/app/data # Mount a data directory to persist the DB safely
+    env_file:
+      - .env # Load secrets from .env file
+    environment:
+      - PYTHONUNBUFFERED=1
