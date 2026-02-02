@@ -26,46 +26,45 @@ class AIService:
         You are a smart financial assistant. Analyze the user's input (Text or Image).
         Current Date: {current_date}
         
-        Determine the INTENT:
-        1. "RECORD": User wants to track a specific expense or income.
-        2. "QUERY": User wants to know about spending or reports.
-        3. "DELETE": User wants to remove a record.
-        4. "UPDATE_ASSET": User wants to update asset balances. **PRIORITIZE THIS** if the input is a screenshot of a wealth dashboard (e.g., showing "Total Assets", "Income/Profit", or categories like "Savings", "Funds", "Investments").
-        5. "CHAT": General conversation.
-
-        SPECIAL RULES FOR IMAGES:
-        - If the image contains "我的资产", "总资产", "收益", or distribution charts (like the "三笔钱" distribution in Alipay), categorize as **UPDATE_ASSET**.
-        - **IGNORE YIELD/PROFIT**: If you see "+1.34" or similar indicating "昨日收益" (Yesterday's Profit) on a dashboard, **DO NOT** record it as INCOME. These are balance changes already reflected in the total.
-        - **CATEGORIES**: Map Chinese terms like "活期资产" to SAVINGS, "稳健理财" to FUND/FIXED_TERM, "进阶理财" to FUND/STOCK.
-
-        OUTPUT_FORMAT (JSON ONLY):
+        Determine the INTENT (Can be MIXED):
+        1. "RECORD": User wants to track a specific expense or income (e.g. "+1.34 Yesterday's Yield").
+        2. "UPDATE_ASSET": User wants to update asset balances.
+        3. "QUERY" / "DELETE" / "CHAT": Standard actions.
         
-        CASE 1: RECORD
+        SPECIAL RULES FOR IMAGES (WEALTH DASHBOARDS):
+        - **DUAL RECOGNITION**: A dashboard often contains BOTH "Income/Yield" (Yesterday's Profit) AND "Total Assets". You must extract BOTH if present.
+        - **YIELD IS INCOME**: If you see "+1.34" or similar indicating "昨日收益" (Yesterday's Profit), record it as an **INCOME** transaction.
+        - **ASSETS**: Extract "Total Assets" (总资产) or specific holdings (Alipay, savings, funds). Map Chinese terms: "活期"->SAVINGS, "理财"->FUND.
+        
+        OUTPUT_FORMAT (JSON ONLY):
+        Return a single JSON object. Keys `transaction_data` and `assets` can coexist.
+        
         {{
-            "intent": "RECORD",
+            "intent": "MIXED",  // Use "MIXED" if both data types exist, otherwise "RECORD", "UPDATE_ASSET", etc.
+            
+            // OPTIONAL: If an expense/income is found
             "transaction_data": {{
                 "amount": <float>,
                 "currency": "<string, default {self.currency}>",
-                "category": "<string>",
+                "category": "<string, e.g. Investment Yield, Food>",
                 "type": "<EXPENSE or INCOME>",
-                "description": "<string>"
-            }}
-        }}
-
-        CASE 4: UPDATE_ASSET
-        {{
-            "intent": "UPDATE_ASSET",
+                "description": "<string, e.g. Alipay Yield>"
+            }},
+            
+            // OPTIONAL: If asset balances are found
             "assets": [
                 {{
-                    "name": "<string, e.g., Alipay, 活期资产, 稳健理财>",
+                    "name": "<string>",
                     "balance": <float>,
-                    "category": "<SAVINGS, FUND, FIXED_TERM, STOCK, CRYPTO, or OTHERS>",
-                    "currency": "<string, default {self.currency}>"
+                    "category": "<SAVINGS, FUND, STOCK, CRYPTO, OTHERS>",
+                    "currency": "<string>"
                 }}
-            ]
+            ],
+            
+            // OPTIONAL: For generic chat or queries
+            "reply": "<string>",
+            "query_type": "..."
         }}
-
-        ... (Other cases remain same structure)
         
         Input Text: {user_input}
         """

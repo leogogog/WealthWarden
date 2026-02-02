@@ -101,47 +101,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         # 1. Analyze Intent (ASYNC)
         result = await ai_service.analyze_input(text)
-        intent = result.get("intent", "CHAT")
         
-        db = next(get_db())
-        
-        # --- CASE 1: RECORD ---
-        if intent == "RECORD":
-            data = result.get("transaction_data", {})
-            # Deduplication: Check for similar transaction in last 5 minutes
-            five_mins_ago = datetime.utcnow() - timedelta(minutes=5)
-            exists = db.query(Transaction).filter(
-                Transaction.amount == data.get('amount'),
-                Transaction.type == data.get('type'),
-                Transaction.category == data.get('category'),
-                Transaction.date >= five_mins_ago
-            ).first()
-            
-            if exists:
-                await update.message.reply_text("⚠️ *Duplicate detected*: This transaction was already recorded recently.", parse_mode='Markdown')
-                return
+        # Try to handle as Dual Intent (Transaction + Assets)
+        # This covers RECORD, UPDATE_ASSET, and MIXED
+        if await handle_dual_intent(update, context, result):
+            return
 
-            new_tx = Transaction(
-                amount=data.get('amount'),
-                currency=data.get('currency', 'CNY'),
-                category=data.get('category'),
-                type=data.get('type'),
-                description=data.get('description'),
-                raw_text=text
-            )
-            db.add(new_tx)
-            db.commit()
-            
-            response_text = (
-                f"✅ *Recorded*\n"
-                f"{data.get('type')} - {data.get('category')}\n"
-                f"Amount: {data.get('amount')} {data.get('currency')}"
-            )
-            # Reply directly
-            await update.message.reply_text(response_text, parse_mode='Markdown')
+        intent = result.get("intent", "CHAT")
+        db = next(get_db())
 
         # --- CASE 2: QUERY ---
-        elif intent == "QUERY":
+        if intent == "QUERY":
             analyzer = FinanceAnalyzer(db)
             query_type = result.get("query_type")
             
@@ -156,12 +126,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # Generate Answer (ASYNC)
             answer = await ai_service.generate_natural_response(text, data_summary)
             await update.message.reply_text(answer)
-
-        # --- CASE 4: UPDATE ASSET ---
-        elif intent == "UPDATE_ASSET":
-            assets_data = result.get("assets", [])
-            summary = await handle_asset_update(db, assets_data)
-            await update.message.reply_text(summary, parse_mode='Markdown')
 
         # --- CASE 5: DELETE ---
         elif intent == "DELETE":
@@ -239,41 +203,21 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         
         # 1. Analyze with AI (Vision) (ASYNC)
         result = await ai_service.analyze_input(user_input, image_data=img_bytes, mime_type="image/jpeg")
-        intent = result.get("intent", "CHAT")
         
-        # Re-use logic for RECORD (most likely for images)
-        if intent == "RECORD":
-            db = next(get_db())
-            data = result.get("transaction_data", {})
-            new_tx = Transaction(
-                amount=data.get('amount'),
-                currency=data.get('currency', 'CNY'),
-                category=data.get('category'),
-                type=data.get('type'),
-                description=data.get('description'),
-                raw_text="[Image] " + user_input
-            )
-            db.add(new_tx)
-            db.commit()
+        # 2. Try to handle as Dual Intent (Transaction + Assets)
+        # This covers RECORD, UPDATE_ASSET, and MIXED intents if keys are present
+        was_processed = await handle_dual_intent(update, context, result)
+        
+        if was_processed:
+            # If we successfully processed data, remove the "Analyzing..." message or just leave it
+            # The handle_dual_intent sends a new reply. We can delete the status msg.
+            await status_msg.delete()
+            return
             
-            response_text = (
-                f"✅ *Receipt Recorded*\n"
-                f"{data.get('type')} - {data.get('category')}\n"
-                f"Amount: {data.get('amount')} {data.get('currency')}\n"
-                f"Item: {data.get('description')}"
-            )
-            await status_msg.edit_text(response_text, parse_mode='Markdown')
-            
-        elif intent == "UPDATE_ASSET":
-            db = next(get_db())
-            assets_data = result.get("assets", [])
-            summary = await handle_asset_update(db, assets_data)
-            await status_msg.edit_text(summary, parse_mode='Markdown')
-
-        elif intent == "QUERY":
-             # Handle queries from image text (unlikely but possible)
+        # 3. Fallback for QUERY or CHAT
+        intent = result.get("intent", "CHAT")
+        if intent == "QUERY":
              await status_msg.edit_text(f"I found this data: {result}")
-             
         else:
             reply = result.get("reply", "I saw the image but couldn't extract finance data.")
             await status_msg.edit_text(reply)
@@ -313,6 +257,70 @@ def main() -> None:
 
     # Run the bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+def is_duplicate_transaction(db, data):
+    """Check if a similar transaction exists within the last 24 hours."""
+    from datetime import datetime, timedelta
+    
+    # Time window: 24 hours (since yields might be reported daily at similar times)
+    time_window = datetime.utcnow() - timedelta(hours=24)
+    
+    exists = db.query(Transaction).filter(
+        Transaction.amount == data.get('amount'),
+        Transaction.type == data.get('type'),
+        # Allow some flexibility or exact match? Exact for now.
+        Transaction.category == data.get('category'), 
+        Transaction.date >= time_window
+    ).first()
+    
+    return exists is not None
+
+async def handle_dual_intent(update, context, result):
+    """
+    Handles potential mixed content: both transaction_data and assets.
+    Returns True if any financial data was processed, False otherwise.
+    """
+    db = next(get_db())
+    processed_any = False
+    response_parts = []
+    
+    # 1. Process Transaction
+    tx_data = result.get("transaction_data")
+    if tx_data and tx_data.get("amount"):
+        processed_any = True
+        
+        if is_duplicate_transaction(db, tx_data):
+            response_parts.append(f"⚠️ *Skipped Duplicate*: {tx_data.get('type')} {tx_data.get('amount')} (recorded recently)")
+        else:
+            new_tx = Transaction(
+                amount=tx_data.get('amount'),
+                currency=tx_data.get('currency', 'CNY'),
+                category=tx_data.get('category'),
+                type=tx_data.get('type'),
+                description=tx_data.get('description'),
+                raw_text="[Auto-Detected] " + (update.message.caption or update.message.text or "")
+            )
+            db.add(new_tx)
+            # Commit processing immediately for transaction
+            db.commit() 
+            
+            response_parts.append(
+                f"✅ *Recorded {tx_data.get('type')}*\n"
+                f"{tx_data.get('category')}: {tx_data.get('amount')} {tx_data.get('currency')}"
+            )
+
+    # 2. Process Assets
+    assets_data = result.get("assets")
+    if assets_data:
+        processed_any = True
+        asset_summary = await handle_asset_update(db, assets_data)
+        response_parts.append(asset_summary)
+        
+    if processed_any:
+        final_response = "\n\n".join(response_parts)
+        await update.message.reply_text(final_response, parse_mode='Markdown')
+        
+    return processed_any
 
 async def handle_asset_update(db, assets_data):
     """Helper to update multiple assets in DB and return summary."""
