@@ -52,6 +52,7 @@ async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.effective_user.id != ALLOWED_USER_ID: return
     
     status_msg = await update.message.reply_text("Crunching the numbers... 📊")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     try:
         db = next(get_db())
@@ -65,8 +66,8 @@ async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await status_msg.edit_text("No data found for this month yet! Start logging first.")
             return
 
-        # 2. Get AI Analysis
-        analysis = ai_service.get_financial_advice(summary_text)
+        # 2. Get AI Analysis (ASYNC)
+        analysis = await ai_service.get_financial_advice(summary_text)
         
         # 3. Format Output
         final_reply = (
@@ -92,11 +93,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     text = update.message.text
-    status_msg = await update.message.reply_text("Thinking... 🤔")
+    # REMOVED: status_msg = await update.message.reply_text("Thinking... 🤔")
+    # Instead, use typing action which is non-intrusive
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     try:
-        # 1. Analyze Intent
-        result = ai_service.analyze_input(text)
+        # 1. Analyze Intent (ASYNC)
+        result = await ai_service.analyze_input(text)
         intent = result.get("intent", "CHAT")
         
         db = next(get_db())
@@ -120,7 +123,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"{data.get('type')} - {data.get('category')}\n"
                 f"Amount: {data.get('amount')} {data.get('currency')}"
             )
-            await status_msg.edit_text(response_text, parse_mode='Markdown')
+            # Reply directly
+            await update.message.reply_text(response_text, parse_mode='Markdown')
 
         # --- CASE 2: QUERY ---
         elif intent == "QUERY":
@@ -135,24 +139,69 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 stats = analyzer.get_monthly_summary()
                 data_summary = analyzer.format_summary_text(stats)
             
-            # Generate Answer
-            answer = ai_service.generate_natural_response(text, data_summary)
-            await status_msg.edit_text(answer)
+            # Generate Answer (ASYNC)
+            answer = await ai_service.generate_natural_response(text, data_summary)
+            await update.message.reply_text(answer)
 
-        # --- CASE 3: CHAT ---
+        # --- CASE 3: DELETE ---
+        elif intent == "DELETE":
+            target = result.get("target")
+            search_term = result.get("search_term")
+            
+            transaction_to_delete = None
+            
+            if target == "LAST":
+                # Get the absolute last transaction
+                transaction_to_delete = db.query(Transaction).order_by(Transaction.id.desc()).first()
+                if not transaction_to_delete:
+                    await update.message.reply_text("Your transaction history is empty.")
+                    return
+
+            elif target == "SEARCH" and search_term:
+                # Fuzzy search by description
+                candidates = db.query(Transaction).filter(
+                    Transaction.description.ilike(f"%{search_term}%")
+                ).order_by(Transaction.id.desc()).all()
+                
+                if len(candidates) == 0:
+                    await update.message.reply_text(f"I couldn't find any transaction matching '{search_term}'.")
+                    return
+                elif len(candidates) == 1:
+                    transaction_to_delete = candidates[0]
+                else:
+                    # Too many matches
+                    msg = f"Found {len(candidates)} matches for '{search_term}'. Please be more specific (e.g. mention the amount).\n\n"
+                    # List top 3
+                    for tx in candidates[:3]:
+                        msg += f"- {tx.description} ({tx.amount} {tx.currency})\n"
+                    await update.message.reply_text(msg)
+                    return
+            
+            if transaction_to_delete:
+                db.delete(transaction_to_delete)
+                db.commit()
+                await update.message.reply_text(
+                    f"🗑️ Deleted: {transaction_to_delete.description} ({transaction_to_delete.amount} {transaction_to_delete.currency})"
+                )
+            else:
+                # Fallback if target is weird or search term missing
+                await update.message.reply_text("I'm not sure which transaction you want me to delete.")
+
+        # --- CASE 4: CHAT ---
         else:
             reply = result.get("reply", "I'm here to help you manage your finances!")
-            await status_msg.edit_text(reply)
+            await update.message.reply_text(reply)
         
     except Exception as e:
         logger.error(f"Error processing message: {e}")
-        await status_msg.edit_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming photos (receipts, etc)."""
     if update.effective_user.id != ALLOWED_USER_ID: return
     
     status_msg = await update.message.reply_text("Analyzing image... 🖼️")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     try:
         # Get the largest photo
@@ -168,8 +217,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Determine caption or use default
         user_input = update.message.caption or "Analyze this receipt/image"
         
-        # 1. Analyze with AI (Vision)
-        result = ai_service.analyze_input(user_input, image_data=img_bytes, mime_type="image/jpeg")
+        # 1. Analyze with AI (Vision) (ASYNC)
+        result = await ai_service.analyze_input(user_input, image_data=img_bytes, mime_type="image/jpeg")
         intent = result.get("intent", "CHAT")
         
         # Re-use logic for RECORD (most likely for images)

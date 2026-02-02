@@ -1,6 +1,7 @@
 from google import genai
 import os
 import json
+import asyncio
 from datetime import datetime
 
 class AIService:
@@ -11,9 +12,10 @@ class AIService:
         
         # Initialize the new Client
         self.client = genai.Client(api_key=self.api_key)
-        self.model_name = "gemini-2.0-flash" # Upgrade to latest Flash model for speed/cost or keep user pref
+        # Switch to Gemini 2.0 Flash for speed and efficiency
+        self.model_name = "gemini-2.0-flash" 
 
-    def analyze_input(self, user_input, image_data=None, mime_type=None):
+    async def analyze_input(self, user_input, image_data=None, mime_type=None):
         """
         Analyzes input to determine intent (RECORD, QUERY, CHAT) and extracts relevant data.
         """
@@ -24,14 +26,54 @@ class AIService:
         Current Date: {current_date}
         
         Determine the INTENT:
-        ... (Logic same as before) ...
+        1. "RECORD": User wants to track an expense or income (e.g., "Lunch 50", "Taxi $20", receipt photo).
+        2. "QUERY": User wants to know about their spending (e.g., "How much did I spend on food?", "Status report").
+        3. "DELETE": User wants to remove a transaction (e.g., "Delete the last one", "Remove the taxi expense").
+        4. "CHAT": General conversation or unclear input.
+
+        OUTPUT_FORMAT (JSON ONLY):
+        
+        CASE 1: RECORD
+        {{
+            "intent": "RECORD",
+            "transaction_data": {{
+                "amount": <float>,
+                "currency": "<string, default CNY>",
+                "category": "<string, e.g., Food, Transport, Salary, Shopping, Others>",
+                "type": "<EXPENSE or INCOME>",
+                "description": "<string, brief description>"
+            }}
+        }}
+
+        CASE 2: QUERY
+        {{
+            "intent": "QUERY",
+            "query_type": "<SPENDING_SUMMARY or SPECIFIC_CATEGORY>",
+            "specific_category": "<string or null>",
+            "time_period": "<string, e.g., this_month>"
+        }}
+
+        CASE 3: DELETE
+        {{
+            "intent": "DELETE",
+            "target": "<LAST or SEARCH>",
+            "search_term": "<string, keywords to find the record, or null>"
+        }}
+
+        CASE 4: CHAT
+        {{
+            "intent": "CHAT",
+            "reply": "<string, helpful response>"
+        }}
+        
         Input Text: {user_input}
         """
 
         try:
+            from google.genai import types
+            
             if image_data and mime_type:
                 # Create the image content part using the new SDK types
-                from google.genai import types
                 image_part = types.Part.from_bytes(data=image_data, mime_type=mime_type)
                 
                 # Use a specific prompting strategy for images
@@ -43,18 +85,21 @@ class AIService:
             else:
                 contents = prompt
             
-            response = self.client.models.generate_content(
+            # Execute in thread to prevent blocking the event loop
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
                 model=self.model_name, 
-                contents=contents
+                contents=contents,
+                config=types.GenerateContentConfig(response_mime_type='application/json')
             )
             
-            text = response.text.replace("```json", "").replace("```", "").strip()
-            return json.loads(text)
+            # With response_mime_type='application/json', the text is guaranteed to be JSON
+            return json.loads(response.text)
         except Exception as e:
             print(f"Error parsing AI intent: {e}")
-            return {"intent": "CHAT", "reply": "I'm having trouble understanding that image/text. Could you try again?"}
+            return {"intent": "CHAT", "reply": f"Error analyzing input: {str(e)}"}
 
-    def generate_natural_response(self, user_query, data_summmary):
+    async def generate_natural_response(self, user_query, data_summmary):
         """
         Generates a natural language answer based on retrieved data.
         """
@@ -69,7 +114,8 @@ class AIService:
         If the data is empty or zero, say so politely.
         """
         try:
-            response = self.client.models.generate_content(
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
                 model=self.model_name,
                 contents=prompt
             )
@@ -77,7 +123,7 @@ class AIService:
         except Exception as e:
             return f"Here is the data: {data_summmary}"
 
-    def get_financial_advice(self, financial_summary):
+    async def get_financial_advice(self, financial_summary):
         """
         Generates advice based on a summary of recent finances.
         """
@@ -98,7 +144,8 @@ class AIService:
         
         try:
             # New SDK Usage
-            response = self.client.models.generate_content(
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
                 model=self.model_name,
                 contents=prompt
             )
