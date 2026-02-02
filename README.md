@@ -2,7 +2,7 @@
 
 **WealthWarden** is a secure, private, and intelligent Personal Finance Assistant that lives in your Telegram. Powered by Google's **Gemini 3 Pro**, it turns your natural language messages into structured financial data, provides scientific analysis, and helps you predict future expenses.
 
-**WealthWarden** 是一个安全、通过 Telegram 运行的只能个人财务助手。由 Google **Gemini 3 Pro** 驱动，它能将您的自然语言消息转化为结构化的财务数据，提供科学的财务分析，并帮助您预测未来的支出。
+**WealthWarden** 是一个安全、通过 Telegram 运行的智能个人财务助手。由 Google **Gemini 3 Pro** 驱动，它能将您的自然语言消息转化为结构化的财务数据，提供科学的财务分析，并帮助您预测未来的支出。
 
 ---
 
