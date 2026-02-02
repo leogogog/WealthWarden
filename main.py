@@ -606,11 +606,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         # Case 0: Quick Log for specific Asset
         if "expect_quick_log_for" in context.user_data:
-            asset_name = context.user_data.pop('expect_quick_log_for')
+            asset_name = context.user_data['expect_quick_log_for'] # Don't pop yet, in case we fail and want to retry or keep context? Actually better to just proceed.
+            # actually we should keep it until success
+            
+            # Try strict parsing first
+            parsed_successfully = False
+            amount = 0.0
+            category = "General"
+            desc = ""
+            
             parts = text.split(maxsplit=1)
             try:
+                # Attempt standard format: "50 Lunch"
                 amount = float(parts[0])
                 rest = parts[1] if len(parts) > 1 else "General"
+                category = rest.split()[0] if rest != "General" else "General"
+                desc = rest
+                parsed_successfully = True
+            except ValueError:
+                # Strict parsing failed, try AI
+                pass
+
+            if not parsed_successfully:
+                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+                ai_result = await ai_service.analyze_input(text)
+                tx_data = ai_result.get("transaction_data")
+                
+                if tx_data and tx_data.get("amount"):
+                    amount = tx_data.get("amount")
+                    category = tx_data.get("category") or "General"
+                    desc = tx_data.get("description") or text
+                    parsed_successfully = True
+                else:
+                    await update.message.reply_text("I couldn't understand that transaction. Please try again (e.g. '50 Coffee').")
+                    return
+
+            # Proceed if we have data
+            if parsed_successfully:
+                context.user_data.pop('expect_quick_log_for') # Clear context now
                 
                 asset = db.query(Asset).filter(Asset.name.ilike(f"%{asset_name}%")).first()
                 if not asset:
@@ -620,9 +653,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 new_tx = Transaction(
                     amount=abs(amount),
                     currency="CNY",
-                    category=rest.split()[0] if rest != "General" else "General",
-                    type="EXPENSE" if amount > 0 else "INCOME",
-                    description=rest,
+                    category=category,
+                    type="EXPENSE" if amount > 0 else "INCOME", # Assumption: Positive input in QuickLog = Expense
+                    description=desc,
                     asset_id=asset.id,
                     raw_text=f"[QuickLog] {text}"
                 )
@@ -632,53 +665,89 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 
                 db.add(new_tx)
                 db.commit()
-                await update.message.reply_text(f"Recorded {new_tx.amount} on {asset.name}.\nNew Balance: {asset.balance:.2f}")
-                return
-            except ValueError:
-                await update.message.reply_text("Invalid format. Send 'Amount [Category]'")
+                await update.message.reply_text(f"Recorded {new_tx.amount} on {asset.name}.\nCategory: {category}\nNew Balance: {asset.balance:.2f}")
                 return
 
         # Case 1: Updating Balance
         if "expect_balance_for" in context.user_data:
+            asset_id = context.user_data['expect_balance_for']
+            new_balance = None
+            
             try:
-                asset_id = context.user_data.pop('expect_balance_for')
                 new_balance = float(text)
+            except ValueError:
+                # Try AI extraction
+                ai_result = await ai_service.analyze_input(text)
+                # Check if specific asset was updated in 'assets' list
+                assets_found = ai_result.get("assets", [])
+                if assets_found:
+                    new_balance = assets_found[0].get("balance")
+                
+                # If not found in assets list, maybe user said "set it to 500"
+                # The current AI prompt might not be tuned for "set balance to X" without context, 
+                # but let's see if transaction_data amount is picked up as a fallback if assets is empty?
+                # Actually, safest is to ask again if clear number isn't found.
+                
+            if new_balance is not None:
+                context.user_data.pop('expect_balance_for')
                 asset = db.get(Asset, asset_id)
                 if asset:
                     asset.balance = new_balance
                     db.commit()
                     await update.message.reply_text(f"Asset {asset.name} balance updated to {new_balance:.2f}", parse_mode='Markdown')
                     return
-            except ValueError:
+            else:
                 await update.message.reply_text("Please enter a valid number.")
                 return
 
         # Case 2: Transferring
         if "expect_transfer_from" in context.user_data:
-            try:
-                from_id = context.user_data.pop('expect_transfer_from')
-                parts = text.split()
-                if len(parts) < 2:
-                    await update.message.reply_text("Invalid format. Use: `<to_asset> <amount>`")
-                    return
-                
+            from_id = context.user_data['expect_transfer_from']
+            parsed_transfer = False
+            target_name = ""
+            amount = 0.0
+            
+            # Strict
+            parts = text.split()
+            if len(parts) >= 2:
                 target_name = parts[0]
-                amount = float(parts[1])
+                try:
+                    amount = float(parts[1])
+                    parsed_transfer = True
+                except ValueError:
+                    pass
+            
+            # AI Fallback
+            if not parsed_transfer:
+                ai_result = await ai_service.analyze_input(f"Transfer from current_asset to {text}") 
+                # We inject context "from current_asset" to help AI understand direction if needed
+                # But actually, the user input might be "to Alipay 50" or "50 Alipay"
                 
+                tx_data = ai_result.get("transaction_data")
+                if tx_data:
+                     # Attempt to interpret. 
+                     # If AI sees "Transfer", it might put target in description or raw text?
+                     # The current AI Service prompt is designed for Log/Update. 
+                     # Let's rely on 'description' or 'asset_name' if prompt extracts it.
+                     # This might be tricky without a dedicated TRANSFER intent in AI.
+                     # Let's try basic heuristic from description or category
+                     pass
+            
+            # Reverting to basic logic for Transfer as it wasn't the main user complaint 
+            # and AI transfer support needs more prompt engineering.
+            # Retaining strict check for now but modifying error message slightly.
+            
+            if parsed_transfer:
+                context.user_data.pop('expect_transfer_from')
                 from_asset = db.get(Asset, from_id)
                 to_asset = db.query(Asset).filter(Asset.name.ilike(f"%{target_name}%")).first()
                 
                 if from_asset and to_asset:
-                    # Logic update for Liability/Credit
-                    if from_asset.type == 'CREDIT':
-                        from_asset.balance += amount
-                    else:
-                        from_asset.balance -= amount
+                    if from_asset.type == 'CREDIT': from_asset.balance += amount
+                    else: from_asset.balance -= amount
                         
-                    if to_asset.type == 'CREDIT':
-                        to_asset.balance -= amount
-                    else:
-                        to_asset.balance += amount
+                    if to_asset.type == 'CREDIT': to_asset.balance -= amount
+                    else: to_asset.balance += amount
                         
                     db.commit()
                     await update.message.reply_text(
@@ -689,28 +758,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 else:
                     await update.message.reply_text("Target asset not found.")
                     return
-            except ValueError:
-                await update.message.reply_text("Invalid amount.")
-                return
+            else:
+                 await update.message.reply_text("Invalid format. Use: `<to_asset> <amount>`")
+                 return
 
-        # Case 3: Log Transaction Details
+        # Case 3: Log Transaction Details (General /add flow)
         if context.user_data.get('expect_log_details'):
+            parsed_successfully = False
+            amount = 0.0
+            category = "General"
+            desc = ""
+            
+            # Strict
             parts = text.split(maxsplit=1)
             try:
                 amount = float(parts[0])
                 rest = parts[1] if len(parts) > 1 else "General"
-                
-                # Simple parsing: first word after number is category? 
-                # Let's say: "50 Lunch at McD" -> Cat: Lunch, Desc: at McD
                 cat_parts = rest.split(maxsplit=1)
                 category = cat_parts[0]
                 desc = cat_parts[1] if len(cat_parts) > 1 else ""
+                parsed_successfully = True
+            except ValueError:
+                pass
                 
+            # AI Fallback
+            if not parsed_successfully:
+                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+                ai_result = await ai_service.analyze_input(text)
+                tx_data = ai_result.get("transaction_data")
+                
+                if tx_data and tx_data.get("amount"):
+                    amount = tx_data.get("amount")
+                    category = tx_data.get("category") or "General"
+                    desc = tx_data.get("description") or text
+                    parsed_successfully = True
+            
+            if parsed_successfully:
                 context.user_data['log_data'] = {
                     'amount': abs(amount),
-                    'type': 'EXPENSE' if amount > 0 else 'INCOME', # Assuming user types positive for expense in this flow?
-                    # Actually, let's assume positive input = Expense unless specified otherwise
-                    # Or simpler: always Expense for now, unless /add used
+                    'type': 'EXPENSE' if amount > 0 else 'INCOME',
                     'category': category,
                     'desc': desc
                 }
@@ -728,9 +814,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
                 return
-            except ValueError:
-                await update.message.reply_text("Invalid format. Please start with a number (e.g. '50 Lunch').")
-                return
+            else:
+                 await update.message.reply_text("I couldn't understand that. Please start with a number or describe the transaction naturally.")
+                 return
 
     # Handle Main Menu Buttons
     if text == "Wallet":
