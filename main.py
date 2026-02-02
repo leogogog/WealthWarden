@@ -218,6 +218,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
              parse_mode='Markdown'
         )
 
+    elif data == "sel_src_new" or data == "ai_src_new":
+        # Handle "New Asset" - Prompt user for name
+        await query.message.reply_text(
+            "Please type the name of the new payment method (e.g. 'Alipay', 'Citi Card'):"
+        )
+        context.user_data['expect_new_asset_for_tx'] = True
+        # If it was AI flow, 'pending_ai_log' is already in context.
+        # If it was Manual flow, 'log_data' is already in context.
+        return
+
     elif data.startswith("sel_src_") or data.startswith("ai_src_"):
         # Source Selected for Log Flow (manual prompt or AI ambiguity)
         is_ai = data.startswith("ai_src_")
@@ -776,6 +786,86 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                  await update.message.reply_text("Invalid format. Use: `<to_asset> <amount>`")
                  return
 
+        # Case 4: Manual Asset Name Input (New Asset Flow)
+        if context.user_data.get('expect_new_asset_for_tx'):
+            asset_name = text.strip()
+            context.user_data.pop('expect_new_asset_for_tx')
+            
+            # 1. Create the Asset (Auto-Create Logic)
+            name_lower = asset_name.lower()
+            asset_type = "LIQUID"
+            if any(x in name_lower for x in ['credit', 'card', 'visa', 'master', 'loan', 'debt', 'huabei', 'baitiao']):
+                asset_type = "CREDIT"
+            
+            # Check exist
+            asset = db.query(Asset).filter(Asset.name.ilike(asset_name)).first()
+            if not asset:
+                asset = Asset(name=asset_name, balance=0.0, category="General", type=asset_type)
+                db.add(asset)
+                db.commit()
+                db.refresh(asset)
+                msg_prefix = f"Created new asset '{asset.name}'."
+            else:
+                msg_prefix = f"Selected '{asset.name}'."
+                
+            # 2. Link to Transaction
+            # Check which flow we are in: AI Pending or Manual Log Data
+            
+            # A: AI Pending
+            tx_id = context.user_data.pop('pending_ai_log', None)
+            if tx_id:
+                tx = db.get(Transaction, tx_id)
+                if tx:
+                    tx.asset_id = asset.id
+                    if tx.type == 'EXPENSE': 
+                        if asset.type == 'CREDIT': asset.balance += tx.amount
+                        else: asset.balance -= tx.amount
+                    else: 
+                        if asset.type == 'CREDIT': asset.balance -= tx.amount
+                        else: asset.balance += tx.amount
+                    
+                    db.commit()
+                    await update.message.reply_text(f"{msg_prefix}\nTransaction linked. New balance: {asset.balance:.2f}")
+                    return
+            
+            # B: Manual Log Data
+            log_data = context.user_data.get('log_data')
+            if log_data:
+                amount = log_data['amount']
+                category = log_data['category']
+                desc = log_data['desc']
+                tx_type = log_data['type']
+                
+                new_tx = Transaction(
+                    amount=amount,
+                    category=category,
+                    description=desc,
+                    type=tx_type,
+                    asset_id=asset.id,
+                    raw_text=f"[ManualNew] {amount} {category} via {asset.name}"
+                )
+                
+                # Balance Update
+                if tx_type == 'EXPENSE':
+                    if asset.type == 'CREDIT': asset.balance += amount
+                    else: asset.balance -= amount
+                else:
+                    if asset.type == 'CREDIT': asset.balance -= amount
+                    else: asset.balance += amount
+                
+                db.add(new_tx)
+                db.commit()
+                
+                await update.message.reply_text(
+                    f"{msg_prefix}\nRecorded {tx_type}\n{category}: {amount:.2f}\n"
+                    f"New Balance: {asset.balance:.2f}"
+                )
+                context.user_data.pop('log_data', None)
+                return
+            
+            await update.message.reply_text("Session expired or invalid state.")
+            return
+
         # Case 3: Log Transaction Details (General /add flow)
         if context.user_data.get('expect_log_details'):
             parsed_successfully = False
@@ -822,6 +912,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 keyboard = []
                 for a in assets:
                     keyboard.append([InlineKeyboardButton(f"{a.name} ({a.type})", callback_data=f"sel_src_{a.id}")])
+                
+                # Add "New Asset" button
+                keyboard.append([InlineKeyboardButton("🆕 Other / New", callback_data="sel_src_new")])
                 
                 await update.message.reply_text(
                     f"Got it: {amount} for {category}.\nSelect Payment Source:",
@@ -1146,6 +1239,9 @@ async def handle_dual_intent(update, context, result):
                 keyboard = []
                 for a in assets:
                     keyboard.append([InlineKeyboardButton(f"Paid via {a.name}", callback_data=f"ai_src_{a.id}")])
+                
+                # Add "New Asset" button
+                keyboard.append([InlineKeyboardButton("🆕 Other / New", callback_data="ai_src_new")])
                 
                 await update.message.reply_text(
                     "I noticed a transaction but I'm not sure which account was used.\nPlease select the source:",
