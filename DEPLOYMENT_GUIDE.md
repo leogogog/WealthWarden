@@ -24,6 +24,9 @@ cd /opt/finance_bot  # Or where your project is
 # 1. Initialize Git
 git init
 
+# TROUBLESHOOTING: If you see "fatal: detected dubious ownership", run:
+# git config --global --add safe.directory /opt/finance_bot
+
 # 2. Add the remote repository
 git remote add origin https://github.com/leogogog/WealthWarden.git
 
