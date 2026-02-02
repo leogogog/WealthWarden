@@ -27,11 +27,16 @@ class AIService:
         Current Date: {current_date}
         
         Determine the INTENT:
-        1. "RECORD": User wants to track an expense or income (e.g., "Lunch 50", "Taxi $20", receipt photo).
-        2. "QUERY": User wants to know about their spending (e.g., "How much did I spend on food?", "Status report").
-        3. "DELETE": User wants to remove a transaction (e.g., "Delete the last one", "Remove the taxi expense").
-        4. "UPDATE_ASSET": User wants to update their asset balances (e.g., "Set Alipay to 5000", or a screenshot of asset distribution).
-        5. "CHAT": General conversation or unclear input.
+        1. "RECORD": User wants to track a specific expense or income.
+        2. "QUERY": User wants to know about spending or reports.
+        3. "DELETE": User wants to remove a record.
+        4. "UPDATE_ASSET": User wants to update asset balances. **PRIORITIZE THIS** if the input is a screenshot of a wealth dashboard (e.g., showing "Total Assets", "Income/Profit", or categories like "Savings", "Funds", "Investments").
+        5. "CHAT": General conversation.
+
+        SPECIAL RULES FOR IMAGES:
+        - If the image contains "我的资产", "总资产", "收益", or distribution charts (like the "三笔钱" distribution in Alipay), categorize as **UPDATE_ASSET**.
+        - **IGNORE YIELD/PROFIT**: If you see "+1.34" or similar indicating "昨日收益" (Yesterday's Profit) on a dashboard, **DO NOT** record it as INCOME. These are balance changes already reflected in the total.
+        - **CATEGORIES**: Map Chinese terms like "活期资产" to SAVINGS, "稳健理财" to FUND/FIXED_TERM, "进阶理财" to FUND/STOCK.
 
         OUTPUT_FORMAT (JSON ONLY):
         
@@ -41,25 +46,10 @@ class AIService:
             "transaction_data": {{
                 "amount": <float>,
                 "currency": "<string, default {self.currency}>",
-                "category": "<string, e.g., Food, Transport, Salary, Shopping, Others>",
+                "category": "<string>",
                 "type": "<EXPENSE or INCOME>",
-                "description": "<string, brief description>"
+                "description": "<string>"
             }}
-        }}
-
-        CASE 2: QUERY
-        {{
-            "intent": "QUERY",
-            "query_type": "<SPENDING_SUMMARY or SPECIFIC_CATEGORY>",
-            "specific_category": "<string or null>",
-            "time_period": "<string, e.g., this_month>"
-        }}
-
-        CASE 3: DELETE
-        {{
-            "intent": "DELETE",
-            "target": "<LAST or SEARCH>",
-            "search_term": "<string, keywords to find the record, or null>"
         }}
 
         CASE 4: UPDATE_ASSET
@@ -67,7 +57,7 @@ class AIService:
             "intent": "UPDATE_ASSET",
             "assets": [
                 {{
-                    "name": "<string, e.g., Alipay, ICBC Savings, Vanguard Fund>",
+                    "name": "<string, e.g., Alipay, 活期资产, 稳健理财>",
                     "balance": <float>,
                     "category": "<SAVINGS, FUND, FIXED_TERM, STOCK, CRYPTO, or OTHERS>",
                     "currency": "<string, default {self.currency}>"
@@ -75,11 +65,7 @@ class AIService:
             ]
         }}
 
-        CASE 5: CHAT
-        {{
-            "intent": "CHAT",
-            "reply": "<string, helpful response>"
-        }}
+        ... (Other cases remain same structure)
         
         Input Text: {user_input}
         """

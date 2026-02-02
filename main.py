@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telegram import Update, ForceReply
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -107,6 +108,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # --- CASE 1: RECORD ---
         if intent == "RECORD":
             data = result.get("transaction_data", {})
+            # Deduplication: Check for similar transaction in last 5 minutes
+            five_mins_ago = datetime.utcnow() - timedelta(minutes=5)
+            exists = db.query(Transaction).filter(
+                Transaction.amount == data.get('amount'),
+                Transaction.type == data.get('type'),
+                Transaction.category == data.get('category'),
+                Transaction.date >= five_mins_ago
+            ).first()
+            
+            if exists:
+                await update.message.reply_text("⚠️ *Duplicate detected*: This transaction was already recorded recently.", parse_mode='Markdown')
+                return
+
             new_tx = Transaction(
                 amount=data.get('amount'),
                 currency=data.get('currency', 'CNY'),
@@ -303,32 +317,46 @@ def main() -> None:
 async def handle_asset_update(db, assets_data):
     """Helper to update multiple assets in DB and return summary."""
     updated_names = []
+    skipped_names = []
+    
     for item in assets_data:
         name = item.get("name")
         balance = item.get("balance")
         if not name or balance is None: continue
         
         asset = db.query(Asset).filter(Asset.name == name).first()
-        if not asset:
+        new_balance = float(balance)
+        
+        if asset:
+            if abs(asset.balance - new_balance) < 0.01:
+                skipped_names.append(name)
+                continue
+            asset.balance = new_balance
+            if item.get("category"): asset.category = item.get("category")
+            if item.get("currency"): asset.currency = item.get("currency")
+        else:
             asset = Asset(
                 name=name,
+                balance=new_balance,
                 category=item.get("category", "OTHERS"),
                 currency=item.get("currency", "CNY")
             )
             db.add(asset)
         
-        asset.balance = float(balance)
-        if item.get("category"): asset.category = item.get("category")
-        if item.get("currency"): asset.currency = item.get("currency")
-        
-        updated_names.append(f"- *{name}*: {balance} {asset.currency}")
+        updated_names.append(f"- *{name}*: {new_balance} {asset.currency}")
     
     db.commit()
     
-    if not updated_names:
-        return "No assets identified to update."
+    response = ""
+    if updated_names:
+        response += "📈 *Assets Updated:*\n" + "\n".join(updated_names) + "\n\n"
+    if skipped_names:
+        response += "🆗 *Unchanged*: " + ", ".join(skipped_names)
+    
+    if not response:
+        return "No asset data found or all up to date."
         
-    return "📈 *Assets Updated:*\n" + "\n".join(updated_names)
+    return response.strip()
 
 if __name__ == "__main__":
     main()
